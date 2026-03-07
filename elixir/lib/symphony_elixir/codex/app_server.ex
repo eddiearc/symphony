@@ -312,6 +312,18 @@ defmodule SymphonyElixir.Codex.AppServer do
         emit_turn_event(on_message, :turn_completed, payload, payload_string, port, payload)
         {:ok, :turn_completed}
 
+      {:ok, %{"method" => "codex/event/error"} = payload} ->
+        emit_turn_event(
+          on_message,
+          :codex_error,
+          payload,
+          payload_string,
+          port,
+          Map.get(payload, "params")
+        )
+
+        {:error, {:codex_error, payload}}
+
       {:ok, %{"method" => "turn/failed", "params" => _} = payload} ->
         emit_turn_event(
           on_message,
