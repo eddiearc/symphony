@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Workspace do
   """
 
   require Logger
-  alias SymphonyElixir.Config
+  alias SymphonyElixir.{Config, PathSafety}
 
   @excluded_entries MapSet.new([".elixir_ls", "tmp"])
 
@@ -15,9 +15,8 @@ defmodule SymphonyElixir.Workspace do
     try do
       safe_id = safe_identifier(issue_context.issue_identifier)
 
-      workspace = workspace_path_for_issue(safe_id)
-
-      with :ok <- validate_workspace_path(workspace),
+      with {:ok, workspace} <- workspace_path_for_issue(safe_id),
+           :ok <- validate_workspace_path(workspace),
            {:ok, created?} <- ensure_workspace(workspace),
            :ok <- maybe_run_after_create_hook(workspace, issue_context, created?) do
         {:ok, workspace}
@@ -71,9 +70,12 @@ defmodule SymphonyElixir.Workspace do
   @spec remove_issue_workspaces(term()) :: :ok
   def remove_issue_workspaces(identifier) when is_binary(identifier) do
     safe_id = safe_identifier(identifier)
-    workspace = Path.join(Config.workspace_root(), safe_id)
 
-    remove(workspace)
+    case workspace_path_for_issue(safe_id) do
+      {:ok, workspace} -> remove(workspace)
+      {:error, _reason} -> :ok
+    end
+
     :ok
   end
 
@@ -84,8 +86,9 @@ defmodule SymphonyElixir.Workspace do
   @spec run_before_run_hook(Path.t(), map() | String.t() | nil) :: :ok | {:error, term()}
   def run_before_run_hook(workspace, issue_or_identifier) when is_binary(workspace) do
     issue_context = issue_context(issue_or_identifier)
+    hooks = Config.settings!().hooks
 
-    case Config.workspace_hooks()[:before_run] do
+    case hooks.before_run do
       nil ->
         :ok
 
@@ -97,8 +100,9 @@ defmodule SymphonyElixir.Workspace do
   @spec run_after_run_hook(Path.t(), map() | String.t() | nil) :: :ok
   def run_after_run_hook(workspace, issue_or_identifier) when is_binary(workspace) do
     issue_context = issue_context(issue_or_identifier)
+    hooks = Config.settings!().hooks
 
-    case Config.workspace_hooks()[:after_run] do
+    case hooks.after_run do
       nil ->
         :ok
 
@@ -109,7 +113,9 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp workspace_path_for_issue(safe_id) when is_binary(safe_id) do
-    Path.join(Config.workspace_root(), safe_id)
+    Config.settings!().workspace.root
+    |> Path.join(safe_id)
+    |> PathSafety.canonicalize()
   end
 
   defp safe_identifier(identifier) do
@@ -123,9 +129,11 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp maybe_run_after_create_hook(workspace, issue_context, created?) do
+    hooks = Config.settings!().hooks
+
     case created? do
       true ->
-        case Config.workspace_hooks()[:after_create] do
+        case hooks.after_create do
           nil ->
             :ok
 
@@ -139,9 +147,11 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp maybe_run_before_remove_hook(workspace) do
+    hooks = Config.settings!().hooks
+
     case File.dir?(workspace) do
       true ->
-        case Config.workspace_hooks()[:before_remove] do
+        case hooks.before_remove do
           nil ->
             :ok
 
@@ -164,7 +174,7 @@ defmodule SymphonyElixir.Workspace do
   defp ignore_hook_failure({:error, _reason}), do: :ok
 
   defp run_hook(command, workspace, issue_context, hook_name) do
-    timeout_ms = Config.workspace_hooks()[:timeout_ms]
+    timeout_ms = Config.settings!().hooks.timeout_ms
 
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace}")
 
@@ -212,46 +222,29 @@ defmodule SymphonyElixir.Workspace do
 
   defp validate_workspace_path(workspace) when is_binary(workspace) do
     expanded_workspace = Path.expand(workspace)
-    root = Path.expand(Config.workspace_root())
-    root_prefix = root <> "/"
+    expanded_root = Path.expand(Config.settings!().workspace.root)
+    expanded_root_prefix = expanded_root <> "/"
 
-    cond do
-      expanded_workspace == root ->
-        {:error, {:workspace_equals_root, expanded_workspace, root}}
+    with {:ok, canonical_workspace} <- PathSafety.canonicalize(expanded_workspace),
+         {:ok, canonical_root} <- PathSafety.canonicalize(expanded_root) do
+      canonical_root_prefix = canonical_root <> "/"
 
-      String.starts_with?(expanded_workspace <> "/", root_prefix) ->
-        ensure_no_symlink_components(expanded_workspace, root)
+      cond do
+        canonical_workspace == canonical_root ->
+          {:error, {:workspace_equals_root, canonical_workspace, canonical_root}}
 
-      true ->
-        {:error, {:workspace_outside_root, expanded_workspace, root}}
-    end
-  end
+        String.starts_with?(canonical_workspace <> "/", canonical_root_prefix) ->
+          :ok
 
-  defp ensure_no_symlink_components(workspace, root) do
-    workspace
-    |> Path.relative_to(root)
-    |> Path.split()
-    |> Enum.reduce_while(root, fn segment, current_path ->
-      next_path = Path.join(current_path, segment)
+        String.starts_with?(expanded_workspace <> "/", expanded_root_prefix) ->
+          {:error, {:workspace_symlink_escape, expanded_workspace, canonical_root}}
 
-      case File.lstat(next_path) do
-        {:ok, %File.Stat{type: :symlink}} ->
-          {:halt, {:error, {:workspace_symlink_escape, next_path, root}}}
-
-        {:ok, _stat} ->
-          {:cont, next_path}
-
-        {:error, :enoent} ->
-          {:halt, :ok}
-
-        {:error, reason} ->
-          {:halt, {:error, {:workspace_path_unreadable, next_path, reason}}}
+        true ->
+          {:error, {:workspace_outside_root, canonical_workspace, canonical_root}}
       end
-    end)
-    |> case do
-      :ok -> :ok
-      {:error, _reason} = error -> error
-      _final_path -> :ok
+    else
+      {:error, {:path_canonicalize_failed, path, reason}} ->
+        {:error, {:workspace_path_unreadable, path, reason}}
     end
   end
 

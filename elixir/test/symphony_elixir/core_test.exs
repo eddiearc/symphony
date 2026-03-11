@@ -11,26 +11,35 @@ defmodule SymphonyElixir.CoreTest do
       codex_command: nil
     )
 
-    assert Config.poll_interval_ms() == 30_000
-    assert Config.linear_active_states() == ["Todo", "In Progress"]
-    assert Config.linear_terminal_states() == ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
-    assert Config.linear_assignee() == nil
-    assert Config.agent_max_turns() == 20
+    config = Config.settings!()
+    assert config.polling.interval_ms == 30_000
+    assert config.tracker.active_states == ["Todo", "In Progress"]
+    assert config.tracker.terminal_states == ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    assert config.tracker.assignee == nil
+    assert config.agent.max_turns == 20
 
     write_workflow_file!(Workflow.workflow_file_path(), poll_interval_ms: "invalid")
-    assert Config.poll_interval_ms() == 30_000
+
+    assert_raise ArgumentError, ~r/interval_ms/, fn ->
+      Config.settings!().polling.interval_ms
+    end
+
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "polling.interval_ms"
 
     write_workflow_file!(Workflow.workflow_file_path(), poll_interval_ms: 45_000)
-    assert Config.poll_interval_ms() == 45_000
+    assert Config.settings!().polling.interval_ms == 45_000
 
     write_workflow_file!(Workflow.workflow_file_path(), max_turns: 0)
-    assert Config.agent_max_turns() == 20
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "agent.max_turns"
 
     write_workflow_file!(Workflow.workflow_file_path(), max_turns: 5)
-    assert Config.agent_max_turns() == 5
+    assert Config.settings!().agent.max_turns == 5
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: "Todo,  Review,")
-    assert Config.linear_active_states() == ["Todo", "Review"]
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "tracker.active_states"
 
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: "token",
@@ -44,7 +53,13 @@ defmodule SymphonyElixir.CoreTest do
       codex_command: ""
     )
 
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "codex.command"
+    assert message =~ "can't be blank"
+
+    write_workflow_file!(Workflow.workflow_file_path(), codex_command: "   ")
     assert :ok = Config.validate!()
+    assert Config.settings!().codex.command == "   "
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_command: "/bin/sh app-server")
     assert :ok = Config.validate!()
@@ -62,12 +77,14 @@ defmodule SymphonyElixir.CoreTest do
     assert :ok = Config.validate!()
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_approval_policy: 123)
-    assert {:error, {:invalid_codex_approval_policy, 123}} = Config.validate!()
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "codex.approval_policy"
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_thread_sandbox: 123)
-    assert {:error, {:invalid_codex_thread_sandbox, 123}} = Config.validate!()
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "codex.thread_sandbox"
 
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: 123)
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "123")
     assert {:error, {:unsupported_tracker_kind, "123"}} = Config.validate!()
   end
 
@@ -111,8 +128,8 @@ defmodule SymphonyElixir.CoreTest do
       codex_command: "/bin/sh app-server"
     )
 
-    assert Config.linear_api_token() == env_api_key
-    assert Config.linear_project_slug() == "project"
+    assert Config.settings!().tracker.api_key == env_api_key
+    assert Config.settings!().tracker.project_slug == "project"
     assert :ok = Config.validate!()
   end
 
@@ -129,7 +146,7 @@ defmodule SymphonyElixir.CoreTest do
       codex_command: "/bin/sh app-server"
     )
 
-    assert Config.linear_assignee() == env_assignee
+    assert Config.settings!().tracker.assignee == env_assignee
   end
 
   test "workflow file path defaults to WORKFLOW.md in the current working directory when app env is unset" do
@@ -329,6 +346,84 @@ defmodule SymphonyElixir.CoreTest do
       refute Process.alive?(agent_pid)
       refute File.exists?(workspace)
     after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "missing running issues stop active agents without cleaning the workspace" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-missing-running-reconcile-#{System.unique_integer([:positive])}"
+      )
+
+    previous_memory_issues = Application.get_env(:symphony_elixir, :memory_tracker_issues)
+    issue_id = "issue-missing"
+    issue_identifier = "MT-557"
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: test_root,
+        tracker_active_states: ["Todo", "In Progress", "In Review"],
+        tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate"],
+        poll_interval_ms: 30_000
+      )
+
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+
+      orchestrator_name = Module.concat(__MODULE__, :MissingRunningIssueOrchestrator)
+      {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+      on_exit(fn ->
+        restore_app_env(:memory_tracker_issues, previous_memory_issues)
+
+        if Process.alive?(pid) do
+          Process.exit(pid, :normal)
+        end
+      end)
+
+      Process.sleep(50)
+
+      assert {:ok, workspace} =
+               SymphonyElixir.PathSafety.canonicalize(Path.join(test_root, issue_identifier))
+
+      File.mkdir_p!(workspace)
+
+      agent_pid =
+        spawn(fn ->
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      initial_state = :sys.get_state(pid)
+
+      running_entry = %{
+        pid: agent_pid,
+        ref: nil,
+        identifier: issue_identifier,
+        issue: %Issue{id: issue_id, state: "In Progress", identifier: issue_identifier},
+        started_at: DateTime.utc_now()
+      }
+
+      :sys.replace_state(pid, fn _ ->
+        initial_state
+        |> Map.put(:running, %{issue_id => running_entry})
+        |> Map.put(:claimed, MapSet.new([issue_id]))
+        |> Map.put(:retry_attempts, %{})
+      end)
+
+      send(pid, :tick)
+      Process.sleep(100)
+      state = :sys.get_state(pid)
+
+      refute Map.has_key?(state.running, issue_id)
+      refute MapSet.member?(state.claimed, issue_id)
+      refute Process.alive?(agent_pid)
+      assert File.exists?(workspace)
+    after
+      restore_app_env(:memory_tracker_issues, previous_memory_issues)
       File.rm_rf(test_root)
     end
   end
@@ -538,12 +633,85 @@ defmodule SymphonyElixir.CoreTest do
     assert_due_in_range(due_at_ms, 9_000, 10_500)
   end
 
+  test "stale retry timer messages do not consume newer retry entries" do
+    issue_id = "issue-stale-retry"
+    orchestrator_name = Module.concat(__MODULE__, :StaleRetryOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+    current_retry_token = make_ref()
+    stale_retry_token = make_ref()
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:retry_attempts, %{
+        issue_id => %{
+          attempt: 2,
+          timer_ref: nil,
+          retry_token: current_retry_token,
+          due_at_ms: System.monotonic_time(:millisecond) + 30_000,
+          identifier: "MT-561",
+          error: "agent exited: :boom"
+        }
+      })
+    end)
+
+    send(pid, {:retry_issue, issue_id, stale_retry_token})
+    Process.sleep(50)
+
+    assert %{
+             attempt: 2,
+             retry_token: ^current_retry_token,
+             identifier: "MT-561",
+             error: "agent exited: :boom"
+           } = :sys.get_state(pid).retry_attempts[issue_id]
+  end
+
+  test "manual refresh coalesces repeated requests and ignores superseded ticks" do
+    now_ms = System.monotonic_time(:millisecond)
+    stale_tick_token = make_ref()
+
+    state = %Orchestrator.State{
+      poll_interval_ms: 30_000,
+      max_concurrent_agents: 1,
+      next_poll_due_at_ms: now_ms + 30_000,
+      poll_check_in_progress: false,
+      tick_timer_ref: nil,
+      tick_token: stale_tick_token,
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      codex_rate_limits: nil
+    }
+
+    assert {:reply, %{queued: true, coalesced: false}, refreshed_state} =
+             Orchestrator.handle_call(:request_refresh, {self(), make_ref()}, state)
+
+    assert is_reference(refreshed_state.tick_timer_ref)
+    assert is_reference(refreshed_state.tick_token)
+    refute refreshed_state.tick_token == stale_tick_token
+    assert refreshed_state.next_poll_due_at_ms <= System.monotonic_time(:millisecond)
+
+    assert {:reply, %{queued: true, coalesced: true}, coalesced_state} =
+             Orchestrator.handle_call(:request_refresh, {self(), make_ref()}, refreshed_state)
+
+    assert coalesced_state.tick_token == refreshed_state.tick_token
+    assert {:noreply, ^coalesced_state} = Orchestrator.handle_info({:tick, stale_tick_token}, coalesced_state)
+  end
+
   defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
 
     assert remaining_ms >= min_remaining_ms
     assert remaining_ms <= max_remaining_ms
   end
+
+  defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
+  defp restore_app_env(key, value), do: Application.put_env(:symphony_elixir, key, value)
 
   test "fetch issues by states with empty state set is a no-op" do
     assert {:ok, []} = Client.fetch_issues_by_states([])
@@ -1251,6 +1419,7 @@ defmodule SymphonyElixir.CoreTest do
       }
 
       assert {:ok, _result} = AppServer.run(workspace, "Fix workspace start args", issue)
+      assert {:ok, canonical_workspace} = SymphonyElixir.PathSafety.canonicalize(workspace)
 
       trace = File.read!(trace_file)
       lines = String.split(trace, "\n", trim: true)
@@ -1278,7 +1447,7 @@ defmodule SymphonyElixir.CoreTest do
                    payload["method"] == "thread/start" &&
                      get_in(payload, ["params", "approvalPolicy"]) == expected_approval_policy &&
                      get_in(payload, ["params", "sandbox"]) == "workspace-write" &&
-                     get_in(payload, ["params", "cwd"]) == Path.expand(workspace)
+                     get_in(payload, ["params", "cwd"]) == canonical_workspace
                  end)
                else
                  false
@@ -1287,7 +1456,7 @@ defmodule SymphonyElixir.CoreTest do
 
       expected_turn_sandbox_policy = %{
         "type" => "workspaceWrite",
-        "writableRoots" => [Path.expand(workspace)],
+        "writableRoots" => [canonical_workspace],
         "readOnlyAccess" => %{"type" => "fullAccess"},
         "networkAccess" => false,
         "excludeTmpdirEnvVar" => false,
@@ -1309,7 +1478,7 @@ defmodule SymphonyElixir.CoreTest do
                    }
 
                    payload["method"] == "turn/start" &&
-                     get_in(payload, ["params", "cwd"]) == Path.expand(workspace) &&
+                     get_in(payload, ["params", "cwd"]) == canonical_workspace &&
                      get_in(payload, ["params", "approvalPolicy"]) == expected_approval_policy &&
                      get_in(payload, ["params", "sandboxPolicy"]) == expected_turn_sandbox_policy
                  end)
@@ -1464,6 +1633,9 @@ defmodule SymphonyElixir.CoreTest do
 
       File.chmod!(codex_binary, 0o755)
 
+      workspace_cache = Path.join(Path.expand(workspace), ".cache")
+      File.mkdir_p!(workspace_cache)
+
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
         codex_command: "#{codex_binary} app-server",
@@ -1471,7 +1643,7 @@ defmodule SymphonyElixir.CoreTest do
         codex_thread_sandbox: "workspace-write",
         codex_turn_sandbox_policy: %{
           type: "workspaceWrite",
-          writableRoots: [Path.expand(workspace), Path.join(Path.expand(workspace_root), ".cache")]
+          writableRoots: [Path.expand(workspace), workspace_cache]
         }
       )
 
@@ -1506,7 +1678,7 @@ defmodule SymphonyElixir.CoreTest do
 
       expected_turn_policy = %{
         "type" => "workspaceWrite",
-        "writableRoots" => [Path.expand(workspace), Path.join(Path.expand(workspace_root), ".cache")]
+        "writableRoots" => [Path.expand(workspace), workspace_cache]
       }
 
       assert Enum.any?(lines, fn line ->
