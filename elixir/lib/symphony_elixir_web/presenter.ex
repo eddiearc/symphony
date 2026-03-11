@@ -20,7 +20,8 @@ defmodule SymphonyElixirWeb.Presenter do
           running: Enum.map(snapshot.running, &running_entry_payload/1),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
           codex_totals: snapshot.codex_totals,
-          rate_limits: snapshot.rate_limits
+          rate_limits: snapshot.rate_limits,
+          logs: logs_payload()
         }
 
       :timeout ->
@@ -58,6 +59,11 @@ defmodule SymphonyElixirWeb.Presenter do
       payload ->
         {:ok, Map.update!(payload, :requested_at, &DateTime.to_iso8601/1)}
     end
+  end
+
+  @spec logs_payload() :: map()
+  def logs_payload do
+    SymphonyElixir.LogFile.recent_log_view()
   end
 
   defp issue_payload_body(issue_identifier, running, retry) do

@@ -105,14 +105,16 @@ defmodule SymphonyElixir.CoreTest do
 
     hooks = Map.get(config, "hooks", %{})
     assert is_map(hooks)
-    assert Map.get(hooks, "after_create") =~ "git clone --depth 1 https://github.com/openai/symphony ."
-    assert Map.get(hooks, "after_create") =~ "cd elixir && mise trust"
-    assert Map.get(hooks, "after_create") =~ "mise exec -- mix deps.get"
-    assert Map.get(hooks, "before_remove") =~ "cd elixir && mise exec -- mix workspace.before_remove"
+    assert Map.get(hooks, "after_create") =~ "git clone --depth 1 https://github.com/eddiearc/workcow ."
+    assert Map.get(hooks, "after_create") =~ "pnpm install --frozen-lockfile"
+    assert Map.get(hooks, "after_create") =~ "corepack pnpm install --frozen-lockfile"
+    assert is_nil(Map.get(hooks, "before_remove"))
 
     assert String.trim(prompt) != ""
     assert is_binary(Config.workflow_prompt())
     assert Config.workflow_prompt() == prompt
+    assert prompt =~ "你正在处理 Linear 工单 `{{ issue.identifier }}`"
+    assert prompt =~ "这是一次无人值守的编排会话。"
   end
 
   test "linear api token resolves from LINEAR_API_KEY env var" do
@@ -194,6 +196,70 @@ defmodule SymphonyElixir.CoreTest do
     File.write!(workflow_path, "---\n- not-a-map\n---\nPrompt body\n")
 
     assert {:error, :workflow_front_matter_not_a_map} = Workflow.load(workflow_path)
+  end
+
+  test "workflow raw_content, parse_content, validate_content, and save support structured editing" do
+    workflow_path = Workflow.workflow_file_path()
+
+    rendered_workflow =
+      Workflow.render_content(
+        %{
+          "custom" => %{
+            "quoted" => "say \"hi\" \\\\ path"
+          },
+          tracker: %{
+            kind: "linear",
+            project_slug: "structured-project",
+            active_states: ["Todo", "In Progress"],
+            terminal_states: [],
+            samples: [true, false, nil, 1, 1.5, "ready"],
+            detail_blocks: [
+              %{label: "alpha", enabled: true, notes: "line 1\nline 2\n"},
+              ["nested", 2],
+              :atom_token
+            ]
+          },
+          hooks: %{
+            after_create: "pnpm install\npnpm test\n",
+            before_remove: nil,
+            extras: %{}
+          }
+        },
+        "结构化提示\n第二行\n"
+      )
+
+    assert rendered_workflow =~ "---\ntracker:\n"
+    assert rendered_workflow =~ "terminal_states: []"
+    assert rendered_workflow =~ "samples: [true, false, null, 1, 1.500000, \"ready\"]"
+    assert rendered_workflow =~ "after_create: |\n    pnpm install\n    pnpm test"
+    assert rendered_workflow =~ "extras:\n    {}"
+    assert rendered_workflow =~ "\"say \\\"hi\\\" \\\\\\\\ path\""
+    assert String.ends_with?(rendered_workflow, "结构化提示\n第二行\n")
+
+    assert {:ok, existing_workflow} = Workflow.raw_content(workflow_path)
+    assert existing_workflow != rendered_workflow
+
+    assert {:ok, %{prompt: "Prompt only", prompt_template: "Prompt only", config: %{}}} =
+             Workflow.parse_content("Prompt only\n")
+
+    assert :ok = Workflow.validate_content(rendered_workflow)
+    assert :ok = Workflow.save(rendered_workflow)
+    assert {:ok, ^rendered_workflow} = Workflow.raw_content()
+
+    assert {:ok, loaded_workflow} = Workflow.load()
+    assert get_in(loaded_workflow, [:config, "tracker", "project_slug"]) == "structured-project"
+    assert get_in(loaded_workflow, [:config, "tracker", "terminal_states"]) == []
+    assert get_in(loaded_workflow, [:config, "tracker", "samples"]) == [true, false, nil, 1, 1.5, "ready"]
+    assert get_in(loaded_workflow, [:config, "hooks", "extras"]) == %{}
+    assert loaded_workflow.prompt == "结构化提示\n第二行"
+    assert loaded_workflow.prompt_template == "结构化提示\n第二行"
+  end
+
+  test "workflow validate_content and raw_content surface parse and missing-file errors" do
+    missing_path = Path.join(Path.dirname(Workflow.workflow_file_path()), "MISSING_RAW_WORKFLOW.md")
+
+    assert {:error, {:missing_workflow_file, ^missing_path, :enoent}} = Workflow.raw_content(missing_path)
+    assert {:error, {:workflow_parse_error, _reason}} = Workflow.validate_content("---\ntracker: [\n---\nBroken\n")
   end
 
   test "SymphonyElixir.start_link delegates to the orchestrator" do
@@ -912,19 +978,19 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(issue, attempt: 2)
 
-    assert prompt =~ "You are working on a Linear ticket `MT-616`"
-    assert prompt =~ "Issue context:"
-    assert prompt =~ "Identifier: MT-616"
-    assert prompt =~ "Title: Use rich templates for WORKFLOW.md"
-    assert prompt =~ "Current status: In Progress"
+    assert prompt =~ "你正在处理 Linear 工单 `MT-616`"
+    assert prompt =~ "工单上下文："
+    assert prompt =~ "标识：MT-616"
+    assert prompt =~ "标题：Use rich templates for WORKFLOW.md"
+    assert prompt =~ "当前状态：In Progress"
     assert prompt =~ "https://example.org/issues/MT-616/use-rich-templates-for-workflowmd"
-    assert prompt =~ "This is an unattended orchestration session."
-    assert prompt =~ "Only stop early for a true blocker"
-    assert prompt =~ "Do not include \"next steps for user\""
-    assert prompt =~ "open and follow `.codex/skills/land/SKILL.md`"
-    assert prompt =~ "Do not call `gh pr merge` directly"
-    assert prompt =~ "Continuation context:"
-    assert prompt =~ "retry attempt #2"
+    assert prompt =~ "这是一次无人值守的编排会话。"
+    assert prompt =~ "只有在出现真正的阻塞时才可以提前停止"
+    assert prompt =~ "不要包含“给用户的下一步”"
+    assert prompt =~ "打开并遵循 `.codex/skills/land/SKILL.md`"
+    assert prompt =~ "不要直接调用 `gh pr merge`"
+    assert prompt =~ "继续执行上下文："
+    assert prompt =~ "这是第 #2 次重试"
   end
 
   test "prompt builder adds continuation guidance for retries" do

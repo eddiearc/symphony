@@ -134,6 +134,23 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:stop, {:missing_workflow_file, ^missing_path, :enoent}} = WorkflowStore.init([])
   end
 
+  test "workflow parser preserves utf-8 prompt text for config panel serialization" do
+    chinese_prompt = """
+    你正在处理 Linear 工单 `{{ issue.identifier }}`
+
+    执行要求：
+    - 只汇报已完成动作
+    - 不要包含“给用户的下一步”
+    """
+
+    write_workflow_file!(Workflow.workflow_file_path(), prompt: chinese_prompt)
+
+    assert {:ok, workflow} = Workflow.load()
+    assert String.valid?(workflow.prompt)
+    assert String.valid?(workflow.prompt_template)
+    assert {:ok, _json} = Jason.encode(workflow.prompt_template)
+  end
+
   test "workflow store start_link and poll callback cover missing-file error paths" do
     ensure_workflow_store_running()
     existing_path = Workflow.workflow_file_path()
@@ -322,6 +339,25 @@ defmodule SymphonyElixir.ExtensionsTest do
   test "phoenix observability api preserves state, issue, and refresh responses" do
     snapshot = static_snapshot()
     orchestrator_name = Module.concat(__MODULE__, :ObservabilityApiOrchestrator)
+    log_root = Path.join(System.tmp_dir!(), "symphony-observability-logs-#{System.unique_integer([:positive])}")
+    log_path = Path.join(log_root, "log/symphony.log")
+
+    File.mkdir_p!(Path.dirname(log_path))
+    File.write!(log_path, "info booted\nwarn retrying issue\n")
+
+    previous_log_file = Application.get_env(:symphony_elixir, :log_file)
+
+    on_exit(fn ->
+      if is_nil(previous_log_file) do
+        Application.delete_env(:symphony_elixir, :log_file)
+      else
+        Application.put_env(:symphony_elixir, :log_file, previous_log_file)
+      end
+
+      File.rm_rf(log_root)
+    end)
+
+    Application.put_env(:symphony_elixir, :log_file, log_path)
 
     {:ok, _pid} =
       StaticOrchestrator.start_link(
@@ -372,7 +408,13 @@ defmodule SymphonyElixir.ExtensionsTest do
                "total_tokens" => 12,
                "seconds_running" => 42.5
              },
-             "rate_limits" => %{"primary" => %{"remaining" => 11}}
+             "rate_limits" => %{"primary" => %{"remaining" => 11}},
+             "logs" => %{
+               "path" => log_path,
+               "available" => true,
+               "truncated" => false,
+               "lines" => ["info booted", "warn retrying issue"]
+             }
            }
 
     conn = get(build_conn(), "/api/v1/MT-HTTP")
@@ -514,6 +556,25 @@ defmodule SymphonyElixir.ExtensionsTest do
   test "dashboard liveview renders and refreshes over pubsub" do
     orchestrator_name = Module.concat(__MODULE__, :DashboardOrchestrator)
     snapshot = static_snapshot()
+    log_root = Path.join(System.tmp_dir!(), "symphony-dashboard-logs-#{System.unique_integer([:positive])}")
+    log_path = Path.join(log_root, "log/symphony.log")
+
+    File.mkdir_p!(Path.dirname(log_path))
+    File.write!(log_path, "info dashboard ready\nwarn no active agents\n")
+
+    previous_log_file = Application.get_env(:symphony_elixir, :log_file)
+
+    on_exit(fn ->
+      if is_nil(previous_log_file) do
+        Application.delete_env(:symphony_elixir, :log_file)
+      else
+        Application.put_env(:symphony_elixir, :log_file, previous_log_file)
+      end
+
+      File.rm_rf(log_root)
+    end)
+
+    Application.put_env(:symphony_elixir, :log_file, log_path)
 
     {:ok, orchestrator_pid} =
       StaticOrchestrator.start_link(
@@ -537,6 +598,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "累计用时"
     assert html =~ "在线"
     assert html =~ "离线"
+    assert html =~ "日志区"
     assert html =~ "复制会话 ID"
     assert html =~ "最新动态"
     assert html =~ "配额视窗"
@@ -589,6 +651,206 @@ defmodule SymphonyElixir.ExtensionsTest do
     end)
   end
 
+  test "dashboard exposes a config panel that edits and saves WORKFLOW.md" do
+    orchestrator_name = Module.concat(__MODULE__, :WorkflowEditorOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    workflow_path = Workflow.workflow_file_path()
+
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "观测区"
+    assert html =~ "配置区"
+
+    {:ok, config_view, config_html} = live(build_conn(), "/panel/config")
+
+    assert config_html =~ "WORKFLOW.md 编辑台"
+    assert config_html =~ workflow_path
+    assert config_html =~ "project_slug:"
+    assert config_html =~ "&quot;project&quot;"
+
+    updated_workflow =
+      workflow_path
+      |> File.read!()
+      |> String.replace("project_slug: \"project\"", "project_slug: \"updated-project\"")
+      |> String.replace("You are an agent for this repository.", "Updated workflow prompt")
+
+    saved_html =
+      config_view
+      |> form("#workflow-editor-form", workflow: %{body: updated_workflow})
+      |> render_submit()
+
+    assert saved_html =~ "已保存并重新加载运行配置。"
+    assert File.read!(workflow_path) == updated_workflow
+    assert SymphonyElixir.Config.linear_project_slug() == "updated-project"
+  end
+
+  test "config panel exposes save confirmation metadata and keyboard shortcut hook" do
+    orchestrator_name = Module.concat(__MODULE__, :WorkflowEditorHooksOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/panel/config")
+
+    assert html =~ "phx-hook=\"WorkflowEditor\""
+    assert html =~ "data-save-shortcut=\"meta+s,ctrl+s\""
+    assert html =~ "data-confirm-message="
+    assert html =~ "即将保存 WORKFLOW.md"
+    assert html =~ "当前草稿和已装载配置一致。"
+    assert html =~ "结构化"
+    assert html =~ "YAML"
+    assert html =~ "config-tab config-tab-active"
+    assert html =~ "保存 WORKFLOW.md"
+    assert html =~ "id=\"workflow-save-form\""
+    refute html =~ "Memory"
+    assert html =~ "决定 Symphony 去哪里拉任务"
+    assert html =~ "优先使用这里的值；留空则回退到环境变量"
+    assert html =~ "控制 orchestrator 轮询节奏"
+    assert html =~ "决定每次会话如何启动 Codex"
+    assert html =~ "这是发给每个任务 agent 的核心执行说明"
+  end
+
+  test "config panel offers structured controls that update the markdown draft" do
+    orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowEditorOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, view, _html} = live(build_conn(), "/panel/config")
+
+    updated_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "tracker_project_slug" => "designer-project",
+          "workspace_root" => "/tmp/designer-workspaces",
+          "prompt_template" => "Structured prompt body"
+        }
+      )
+      |> render_change()
+
+    assert updated_html =~ "结构化字段"
+    assert updated_html =~ "designer-project"
+    assert updated_html =~ "/tmp/designer-workspaces"
+    assert updated_html =~ "Structured prompt body"
+  end
+
+  test "config panel saves the latest structured draft even if the textarea posts stale content" do
+    orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowSaveOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    workflow_path = Workflow.workflow_file_path()
+    original_workflow = File.read!(workflow_path)
+
+    {:ok, view, _html} = live(build_conn(), "/panel/config")
+
+    updated_draft_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "tracker_project_slug" => "structured-save-project"
+        }
+      )
+      |> render_change()
+
+    assert updated_draft_html =~ "structured-save-project"
+
+    saved_html =
+      view
+      |> form("#workflow-editor-form", workflow: %{body: original_workflow})
+      |> render_submit()
+
+    assert saved_html =~ "已保存并重新加载运行配置。"
+    assert File.read!(workflow_path) =~ "structured-save-project"
+    assert SymphonyElixir.Config.linear_project_slug() == "structured-save-project"
+  end
+
+  test "config panel rejects tracker.kind memory in yaml mode" do
+    orchestrator_name = Module.concat(__MODULE__, :MemoryTrackerKindRejectedOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    workflow_path = Workflow.workflow_file_path()
+    original_workflow = File.read!(workflow_path)
+    invalid_workflow = String.replace(original_workflow, "kind: \"linear\"", "kind: \"memory\"")
+
+    {:ok, view, _html} = live(build_conn(), "/panel/config")
+
+    saved_html =
+      view
+      |> form("#workflow-editor-form", workflow: %{body: invalid_workflow})
+      |> render_submit()
+
+    assert saved_html =~ "配置区不支持 `tracker.kind: memory`，请改为 `linear`。"
+    assert File.read!(workflow_path) == original_workflow
+  end
+
+  test "config panel exposes hooks controls and persists structured hook edits" do
+    orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowHooksOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    workflow_path = Workflow.workflow_file_path()
+    original_workflow = File.read!(workflow_path)
+
+    {:ok, view, html} = live(build_conn(), "/panel/config")
+
+    assert html =~ "Hooks"
+    assert html =~ "after create"
+    assert html =~ "before remove"
+    assert html =~ "创建 workspace 后立刻执行"
+    assert html =~ "限制单个 hook 最长运行时间"
+
+    updated_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "hooks_after_create" => "git clone https://example.com/repo .\npnpm install\n",
+          "hooks_before_run" => "pnpm lint\n",
+          "hooks_after_run" => "pnpm test\n",
+          "hooks_before_remove" => "echo cleanup\n",
+          "hooks_timeout_ms" => "900000"
+        }
+      )
+      |> render_change()
+
+    assert updated_html =~ "git clone https://example.com/repo ."
+    assert updated_html =~ "pnpm lint"
+    assert updated_html =~ "pnpm test"
+    assert updated_html =~ "echo cleanup"
+    assert updated_html =~ "900000"
+
+    saved_html =
+      view
+      |> form("#workflow-editor-form", workflow: %{body: original_workflow})
+      |> render_submit()
+
+    saved_workflow = File.read!(workflow_path)
+
+    assert saved_html =~ "已保存并重新加载运行配置。"
+    assert saved_workflow =~ "after_create:"
+    assert saved_workflow =~ "git clone https://example.com/repo ."
+    assert saved_workflow =~ "before_run:"
+    assert saved_workflow =~ "pnpm lint"
+    assert saved_workflow =~ "after_run:"
+    assert saved_workflow =~ "pnpm test"
+    assert saved_workflow =~ "before_remove:"
+    assert saved_workflow =~ "echo cleanup"
+    assert saved_workflow =~ "timeout_ms: 900000"
+  end
+
   test "dashboard liveview renders an unavailable state without crashing" do
     start_test_endpoint(
       orchestrator: Module.concat(__MODULE__, :MissingDashboardOrchestrator),
@@ -598,6 +860,37 @@ defmodule SymphonyElixir.ExtensionsTest do
     {:ok, _view, html} = live(build_conn(), "/")
     assert html =~ "快照暂不可用"
     assert html =~ "snapshot_unavailable"
+  end
+
+  test "logs panel renders from left nav even when the log file is empty" do
+    orchestrator_name = Module.concat(__MODULE__, :LogsPanelOrchestrator)
+    snapshot = static_snapshot()
+    log_root = Path.join(System.tmp_dir!(), "symphony-logs-panel-#{System.unique_integer([:positive])}")
+    log_path = Path.join(log_root, "log/symphony.log")
+
+    previous_log_file = Application.get_env(:symphony_elixir, :log_file)
+
+    on_exit(fn ->
+      if is_nil(previous_log_file) do
+        Application.delete_env(:symphony_elixir, :log_file)
+      else
+        Application.put_env(:symphony_elixir, :log_file, previous_log_file)
+      end
+
+      File.rm_rf(log_root)
+    end)
+
+    Application.put_env(:symphony_elixir, :log_file, log_path)
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/panel/logs")
+
+    assert html =~ "日志区"
+    assert html =~ log_path
+    assert html =~ "当前日志文件还没有可展示内容。"
+    assert html =~ "control-nav-link control-nav-link-active"
   end
 
   test "http server serves embedded assets, accepts form posts, and rejects invalid hosts" do

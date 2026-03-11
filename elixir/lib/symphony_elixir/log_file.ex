@@ -20,6 +20,46 @@ defmodule SymphonyElixir.LogFile do
     Path.join(logs_root, @default_log_relative_path)
   end
 
+  @spec configured_log_file() :: Path.t()
+  def configured_log_file do
+    :symphony_elixir
+    |> Application.get_env(:log_file, default_log_file())
+    |> Path.expand()
+  end
+
+  @spec recent_log_view(keyword()) :: %{
+          path: Path.t(),
+          available: boolean(),
+          lines: [String.t()],
+          truncated: boolean()
+        }
+  def recent_log_view(opts \\ []) do
+    path = configured_log_file()
+    line_limit = Keyword.get(opts, :line_limit, 80)
+    byte_limit = Keyword.get(opts, :byte_limit, 64 * 1024)
+
+    case File.stat(path) do
+      {:ok, %File.Stat{size: size}} ->
+        data = read_tail_bytes(path, size, byte_limit)
+        {lines, truncated} = tail_lines(data, size, line_limit, byte_limit)
+
+        %{
+          path: path,
+          available: true,
+          lines: lines,
+          truncated: truncated
+        }
+
+      {:error, _reason} ->
+        %{
+          path: path,
+          available: false,
+          lines: [],
+          truncated: false
+        }
+    end
+  end
+
   @spec configure() :: :ok
   def configure do
     log_file = Application.get_env(:symphony_elixir, :log_file, default_log_file())
@@ -77,4 +117,41 @@ defmodule SymphonyElixir.LogFile do
       }
     }
   end
+
+  defp read_tail_bytes(path, size, byte_limit) do
+    offset = max(size - byte_limit, 0)
+    read_size = size - offset
+
+    {:ok, device} = :file.open(String.to_charlist(path), [:read, :binary])
+
+    try do
+      case :file.pread(device, offset, read_size) do
+        {:ok, data} -> data
+        :eof -> ""
+      end
+    after
+      :ok = :file.close(device)
+    end
+  end
+
+  defp tail_lines(data, size, line_limit, byte_limit) do
+    lines =
+      data
+      |> String.split(~r/\R/u, trim: false)
+      |> drop_partial_first_line(size, byte_limit)
+      |> Enum.reject(&(&1 == ""))
+
+    total_count = length(lines)
+
+    {
+      Enum.take(lines, -line_limit),
+      size > byte_limit or total_count > line_limit
+    }
+  end
+
+  defp drop_partial_first_line(lines, size, byte_limit) when size > byte_limit and length(lines) > 1 do
+    tl(lines)
+  end
+
+  defp drop_partial_first_line(lines, _size, _byte_limit), do: lines
 end

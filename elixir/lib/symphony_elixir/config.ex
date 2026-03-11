@@ -91,6 +91,14 @@ defmodule SymphonyElixir.Config do
     end
   end
 
+  @spec linear_project_slug() :: String.t() | nil
+  def linear_project_slug do
+    case settings() do
+      {:ok, settings} -> settings.tracker.project_slug
+      {:error, _reason} -> nil
+    end
+  end
+
   @spec validate!() :: :ok | {:error, term()}
   def validate! do
     with {:ok, settings} <- settings() do
