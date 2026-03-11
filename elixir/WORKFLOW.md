@@ -1,7 +1,7 @@
 ---
 tracker:
   kind: linear
-  project_slug: "symphony-0c79b11b75ea"
+  project_slug: "workcow-3ded0ff156f2"
   active_states:
     - Todo
     - In Progress
@@ -19,21 +19,26 @@ workspace:
   root: ~/code/symphony-workspaces
 hooks:
   after_create: |
-    git clone --depth 1 https://github.com/openai/symphony .
-    if command -v mise >/dev/null 2>&1; then
-      cd elixir && mise trust && mise exec -- mix deps.get
+    git clone --depth 1 https://github.com/eddiearc/workcow .
+    if command -v pnpm >/dev/null 2>&1; then
+      pnpm install --frozen-lockfile
+    elif command -v corepack >/dev/null 2>&1; then
+      corepack pnpm install --frozen-lockfile
+    else
+      echo "pnpm/corepack not found in PATH" >&2
+      exit 1
     fi
   before_remove: |
-    cd elixir && mise exec -- mix workspace.before_remove
+    :
 agent:
   max_concurrent_agents: 10
   max_turns: 20
 codex:
   command: codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=xhigh --model gpt-5.3-codex app-server
   approval_policy: never
-  thread_sandbox: workspace-write
+  thread_sandbox: danger-full-access
   turn_sandbox_policy:
-    type: workspaceWrite
+    type: dangerFullAccess
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`
@@ -66,8 +71,22 @@ Instructions:
 1. This is an unattended orchestration session. Never ask a human to perform follow-up actions.
 2. Only stop early for a true blocker (missing required auth/permissions/secrets). If blocked, record it in the workpad and move the issue according to workflow.
 3. Final message must report completed actions and blockers only. Do not include "next steps for user".
+4. Work in Chinese by default for plans, workpad updates, commit/PR summaries, and issue comments unless an external system requires English.
 
 Work only in the provided repository copy. Do not touch any other path.
+
+## Project-specific requirements for WorkCow
+
+- Treat the repository `AGENTS.md` as mandatory project policy.
+- WorkCow is an Electron + React + TypeScript + pnpm project, not an Elixir project.
+- For any touched `.ts` / `.tsx` / `.js` / `.jsx` file, update the file header comment when required by repo policy.
+- For any touched folder, update that folder's `README.md` when required by repo policy.
+- Prefer `pnpm` commands for install, build, test, and app validation.
+- Default validation ladder for WorkCow:
+  - targeted unit/integration test first: `pnpm test -- <path-or-pattern>`
+  - then `pnpm build` when renderer/electron/shared runtime code changes
+  - then Playwright / Electron flow validation when the ticket changes a user-facing desktop path and relevant coverage exists
+- When a ticket changes renderer or Electron behavior, include an acceptance criterion that names the concrete WorkCow user path affected (for example: task list, workspace switch, provider settings, composer, memory manager, permission prompt, file preview).
 
 ## Prerequisite: Linear MCP or `linear_graphql` tool is available
 
@@ -154,7 +173,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
     - Do not include metadata already inferable from Linear issue fields (`issue ID`, `status`, `branch`, `PR link`).
 6.  Add explicit acceptance criteria and TODOs in checklist form in the same comment.
     - If changes are user-facing, include a UI walkthrough acceptance criterion that describes the end-to-end user path to validate.
-    - If changes touch app files or app behavior, add explicit app-specific flow checks to `Acceptance Criteria` in the workpad (for example: launch path, changed interaction path, and expected result path).
+    - If changes touch WorkCow app files or app behavior, add explicit app-specific flow checks to `Acceptance Criteria` in the workpad (launch/build path, changed interaction path, expected result path, and workspace impact if relevant).
     - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` and `Validation` sections as required checkboxes (no optional downgrade).
 7.  Run a principal-style self-review of the plan and refine it in the comment.
 8.  Before implementing, capture a concrete reproduction signal and record it in the workpad `Notes` section (command/output, screenshot, or deterministic UI behavior).
@@ -209,10 +228,11 @@ Use this only when completion is blocked by missing required tools or missing au
 5.  Run validation/tests required for the scope.
     - Mandatory gate: execute all ticket-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
+    - For WorkCow, prefer targeted `pnpm test -- ...` coverage first; add `pnpm build` whenever renderer/electron/shared runtime code changes.
     - You may make temporary local proof edits to validate assumptions (for example: tweak a local build input for `make`, or hardcode a UI account / response path) when this increases confidence.
     - Revert every temporary proof edit before commit/push.
     - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.
-    - If app-touching, run `launch-app` validation and capture/upload media via `github-pr-media` before handoff.
+    - If app-touching and the ticket changes a user-facing desktop path, run the closest practical WorkCow runtime proof: relevant Playwright/Electron coverage when available, otherwise a local launch/build proof such as `pnpm dev`, `pnpm build && pnpm start`, or another narrower runtime check. Record the exact command and observed result in the workpad.
 6.  Re-check all acceptance criteria and close any gaps.
 7.  Before every `git push` attempt, run the required validation for your scope and confirm it passes; if it fails, address issues and rerun until green, then commit and push changes.
 8.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
