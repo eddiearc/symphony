@@ -61,8 +61,16 @@ cd symphony/elixir
 mise trust
 mise install
 mise exec -- mix setup
-mise exec -- mix build
-mise exec -- ./bin/symphony ./WORKFLOW.md
+mise exec -- make run
+```
+
+`make run` rebuilds `bin/symphony` before launch and starts the dashboard on
+`http://127.0.0.1:4000/` by default so the running service matches the current source tree.
+Override the workflow path or dashboard port as needed:
+
+```bash
+mise exec -- make run WORKFLOW=/path/to/custom/WORKFLOW.md
+mise exec -- make run PORT=4100 WORKFLOW=/path/to/custom/WORKFLOW.md
 ```
 
 ## Configuration

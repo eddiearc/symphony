@@ -1,9 +1,12 @@
-.PHONY: help all setup deps build fmt fmt-check lint test coverage ci dialyzer e2e
+.PHONY: help all setup deps build run fmt fmt-check lint test coverage ci dialyzer e2e
 
 MIX ?= mix
+WORKFLOW ?= ./WORKFLOW.md
+PORT ?= 4000
+SYMPHONY_ACK_FLAG ?= --i-understand-that-this-will-be-running-without-the-usual-guardrails
 
 help:
-	@echo "Targets: setup, deps, fmt, fmt-check, lint, test, coverage, dialyzer, e2e, ci"
+	@echo "Targets: setup, deps, build, run, fmt, fmt-check, lint, test, coverage, dialyzer, e2e, ci"
 
 setup:
 	$(MIX) setup
@@ -13,6 +16,9 @@ deps:
 
 build:
 	$(MIX) build
+
+run: build
+	./bin/symphony $(SYMPHONY_ACK_FLAG) --port $(PORT) $(WORKFLOW)
 
 fmt:
 	$(MIX) format
