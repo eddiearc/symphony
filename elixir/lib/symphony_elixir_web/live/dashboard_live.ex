@@ -635,6 +635,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     <span class="mono"><%= @payload.logs.path %></span>
                   </span>
                 </div>
+                <p :if={Map.get(@payload.logs, :source_paths, []) != []} class="log-note">
+                  读取来源:
+                  <span class="mono"><%= Enum.join(@payload.logs.source_paths, ", ") %></span>
+                </p>
 
                 <%= if @payload.logs.available and @payload.logs.lines != [] do %>
                   <div class="log-panel">
@@ -1026,9 +1030,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp rate_limit_identity(rate_limits) do
     [
-      rate_limit_value(rate_limits, :limit_name),
-      rate_limit_value(rate_limits, :limit_id),
-      rate_limit_value(rate_limits, :plan_type)
+      rate_limit_value(rate_limits, [:limit_name]),
+      rate_limit_value(rate_limits, [:limit_id]),
+      rate_limit_value(rate_limits, [:plan_type, :planType])
     ]
     |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
     |> case do
@@ -1040,16 +1044,19 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp primary_limit_bucket(rate_limits), do: rate_limit_value(rate_limits, :primary)
   defp secondary_limit_bucket(rate_limits), do: rate_limit_value(rate_limits, :secondary)
 
-  defp primary_limit_used(rate_limits), do: rate_limit_value(primary_limit_bucket(rate_limits), :used_percent)
-  defp secondary_limit_used(rate_limits), do: rate_limit_value(secondary_limit_bucket(rate_limits), :used_percent)
+  defp primary_limit_used(rate_limits),
+    do: rate_limit_value(primary_limit_bucket(rate_limits), [:used_percent, :usedPercent])
+
+  defp secondary_limit_used(rate_limits),
+    do: rate_limit_value(secondary_limit_bucket(rate_limits), [:used_percent, :usedPercent])
 
   defp format_percent(value) when is_integer(value), do: "#{value}%"
   defp format_percent(value) when is_float(value), do: "#{:erlang.float_to_binary(value, decimals: 0)}%"
   defp format_percent(_value), do: "未返回"
 
   defp format_rate_window(bucket) when is_map(bucket) do
-    window = bucket |> rate_limit_value(:window_minutes) |> humanize_window_minutes()
-    reset_at = bucket |> rate_limit_value(:resets_at) |> display_timestamp()
+    window = bucket |> rate_limit_value([:window_minutes, :windowDurationMins]) |> humanize_window_minutes()
+    reset_at = bucket |> rate_limit_value([:resets_at, :resetsAt]) |> display_timestamp()
     "#{window} · 重置 #{reset_at}"
   end
 
@@ -1067,12 +1074,36 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp format_credits(nil), do: "未返回"
   defp format_credits("unlimited"), do: "无限"
+
+  defp format_credits(%{} = credits) do
+    unlimited = rate_limit_value(credits, [:unlimited]) == true
+    has_credits = rate_limit_value(credits, [:has_credits, :hasCredits]) == true
+    balance = rate_limit_value(credits, [:balance])
+
+    cond do
+      unlimited -> "无限"
+      has_credits and is_number(balance) -> format_credits(balance)
+      has_credits -> "可用"
+      true -> "无"
+    end
+  end
+
   defp format_credits(value) when is_integer(value), do: format_int(value)
   defp format_credits(value) when is_float(value), do: :erlang.float_to_binary(value, decimals: 2)
   defp format_credits(value) when is_binary(value), do: value
   defp format_credits(value), do: to_string(value)
 
   defp rate_limit_value(nil, _key), do: nil
+
+  defp rate_limit_value(rate_limits, keys) when is_map(rate_limits) and is_list(keys) do
+    Enum.reduce_while(keys, nil, fn key, _acc ->
+      if Map.has_key?(rate_limits, key) or Map.has_key?(rate_limits, Atom.to_string(key)) do
+        {:halt, rate_limit_value(rate_limits, key)}
+      else
+        {:cont, nil}
+      end
+    end)
+  end
 
   defp rate_limit_value(rate_limits, key) when is_map(rate_limits) do
     Map.get(rate_limits, key) || Map.get(rate_limits, Atom.to_string(key))
@@ -1468,7 +1499,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp truncate_confirm_value(value), do: value |> to_string() |> truncate_confirm_value()
 
-  defp normalize_display_value(value, labels) when value in ["", "nil"], do: "未返回"
+  defp normalize_display_value(value, _labels) when value in ["", "nil"], do: "未返回"
   defp normalize_display_value(value, labels), do: Map.get(labels, value, value)
 
   defp tracker_workflow_form(config) do

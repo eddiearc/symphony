@@ -1330,14 +1330,18 @@ defmodule SymphonyElixir.Orchestrator do
   defp turn_completed_usage_from_payload(_payload), do: nil
 
   defp rate_limits_from_payload(payload) when is_map(payload) do
-    direct = Map.get(payload, "rate_limits") || Map.get(payload, :rate_limits)
+    direct =
+      Map.get(payload, "rate_limits") ||
+        Map.get(payload, :rate_limits) ||
+        Map.get(payload, "rateLimits") ||
+        Map.get(payload, :rateLimits)
 
     cond do
-      rate_limits_map?(direct) ->
-        direct
+      normalized = normalize_rate_limits(direct) ->
+        normalized
 
-      rate_limits_map?(payload) ->
-        payload
+      normalized = normalize_rate_limits(payload) ->
+        normalized
 
       true ->
         rate_limit_payloads(payload)
@@ -1379,22 +1383,102 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp rate_limits_map?(payload) when is_map(payload) do
-    limit_id =
-      Map.get(payload, "limit_id") ||
-        Map.get(payload, :limit_id) ||
-        Map.get(payload, "limit_name") ||
-        Map.get(payload, :limit_name)
-
-    has_buckets =
-      Enum.any?(
-        ["primary", :primary, "secondary", :secondary, "credits", :credits],
-        &Map.has_key?(payload, &1)
-      )
-
-    !is_nil(limit_id) and has_buckets
+    Enum.any?(
+      [
+        "primary",
+        :primary,
+        "secondary",
+        :secondary,
+        "credits",
+        :credits,
+        "plan_type",
+        :plan_type,
+        "planType",
+        :planType,
+        "limit_id",
+        :limit_id,
+        "limit_name",
+        :limit_name
+      ],
+      &Map.has_key?(payload, &1)
+    )
   end
 
   defp rate_limits_map?(_payload), do: false
+
+  defp normalize_rate_limits(payload) when is_map(payload) do
+    if rate_limits_map?(payload) do
+      normalized =
+        %{}
+        |> put_normalized_top_level(payload, :limit_id, ["limit_id", :limit_id])
+        |> put_normalized_top_level(payload, :limit_name, ["limit_name", :limit_name])
+        |> put_normalized_top_level(payload, :plan_type, ["plan_type", :plan_type, "planType", :planType])
+        |> put_normalized_bucket(payload, :primary)
+        |> put_normalized_bucket(payload, :secondary)
+        |> put_normalized_credits(payload)
+
+      if map_size(normalized) > 0, do: normalized
+    end
+  end
+
+  defp normalize_rate_limits(_payload), do: nil
+
+  defp put_normalized_top_level(acc, payload, key, keys) do
+    case map_value(payload, keys) do
+      nil -> acc
+      value -> Map.put(acc, key, value)
+    end
+  end
+
+  defp put_normalized_bucket(acc, payload, bucket_key) do
+    case map_value(payload, [bucket_key, Atom.to_string(bucket_key)]) do
+      bucket when is_map(bucket) ->
+        Map.put(acc, bucket_key, normalize_rate_limit_bucket(bucket))
+
+      _ ->
+        acc
+    end
+  end
+
+  defp put_normalized_credits(acc, payload) do
+    case map_value(payload, [:credits, "credits"]) do
+      credits when is_map(credits) ->
+        Map.put(acc, :credits, normalize_rate_limit_credits(credits))
+
+      nil ->
+        acc
+
+      value ->
+        Map.put(acc, :credits, value)
+    end
+  end
+
+  defp normalize_rate_limit_bucket(bucket) do
+    %{}
+    |> put_normalized_value(:remaining, map_value(bucket, [:remaining, "remaining"]))
+    |> put_normalized_value(:limit, map_value(bucket, [:limit, "limit"]))
+    |> put_normalized_value(:reset_in_seconds, map_value(bucket, [:reset_in_seconds, "reset_in_seconds", :resetInSeconds, "resetInSeconds"]))
+    |> put_normalized_value(:resets_at, map_value(bucket, [:resets_at, "resets_at", :resetsAt, "resetsAt"]))
+    |> put_normalized_value(:used_percent, map_value(bucket, [:used_percent, "used_percent", :usedPercent, "usedPercent"]))
+    |> put_normalized_value(:window_minutes, map_value(bucket, [:window_minutes, "window_minutes", :windowDurationMins, "windowDurationMins"]))
+  end
+
+  defp normalize_rate_limit_credits(credits) do
+    %{}
+    |> put_normalized_lookup(credits, :has_credits, [:has_credits, "has_credits", :hasCredits, "hasCredits"])
+    |> put_normalized_lookup(credits, :unlimited, [:unlimited, "unlimited"])
+    |> put_normalized_lookup(credits, :balance, [:balance, "balance"])
+  end
+
+  defp put_normalized_value(acc, _key, nil), do: acc
+  defp put_normalized_value(acc, key, value), do: Map.put(acc, key, value)
+
+  defp put_normalized_lookup(acc, map, key, lookup_keys) do
+    case map_fetch(map, lookup_keys) do
+      {:ok, value} -> Map.put(acc, key, value)
+      :error -> acc
+    end
+  end
 
   defp explicit_map_at_paths(payload, paths) when is_map(payload) and is_list(paths) do
     Enum.find_value(paths, fn path ->
@@ -1405,6 +1489,30 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp explicit_map_at_paths(_payload, _paths), do: nil
+
+  defp map_value(map, keys) when is_map(map) and is_list(keys) do
+    Enum.reduce_while(keys, nil, fn key, _acc ->
+      if Map.has_key?(map, key) do
+        {:halt, Map.get(map, key)}
+      else
+        {:cont, nil}
+      end
+    end)
+  end
+
+  defp map_value(_map, _keys), do: nil
+
+  defp map_fetch(map, keys) when is_map(map) and is_list(keys) do
+    Enum.reduce_while(keys, :error, fn key, _acc ->
+      if Map.has_key?(map, key) do
+        {:halt, {:ok, Map.get(map, key)}}
+      else
+        {:cont, :error}
+      end
+    end)
+  end
+
+  defp map_fetch(_map, _keys), do: :error
 
   defp map_at_path(payload, path) when is_map(payload) and is_list(path) do
     Enum.reduce_while(path, payload, fn key, acc ->

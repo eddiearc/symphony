@@ -465,7 +465,200 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     )
 
     snapshot = GenServer.call(pid, :snapshot)
-    assert snapshot.rate_limits == rate_limits
+
+    assert snapshot.rate_limits == %{
+             limit_id: "codex",
+             primary: %{remaining: 90, limit: 100},
+             credits: %{has_credits: false, unlimited: false, balance: nil}
+           }
+  end
+
+  test "orchestrator snapshot normalizes token_count rate limits without a limit identifier" do
+    issue_id = "issue-rate-limit-no-id"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-221A",
+      title: "Rate limit snapshot test without limit id",
+      description: "Capture codex rate limit state without identifiers",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-221A"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :RateLimitWithoutIdentifierOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+    process_ref = make_ref()
+    started_at = DateTime.utc_now()
+
+    running_entry = %{
+      pid: self(),
+      ref: process_ref,
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: nil,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      codex_last_reported_input_tokens: 0,
+      codex_last_reported_output_tokens: 0,
+      codex_last_reported_total_tokens: 0,
+      started_at: started_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         payload: %{
+           "method" => "codex/event/token_count",
+           "params" => %{
+             "msg" => %{
+               "type" => "event_msg",
+               "payload" => %{
+                 "type" => "token_count",
+                 "rate_limits" => %{
+                   "plan_type" => "priority",
+                   "primary" => %{
+                     "used_percent" => 52.0,
+                     "window_minutes" => 300,
+                     "resets_at" => 1_772_989_880
+                   },
+                   "secondary" => %{
+                     "used_percent" => 66.0,
+                     "window_minutes" => 10_080,
+                     "resets_at" => 1_773_468_681
+                   },
+                   "credits" => %{
+                     "has_credits" => false,
+                     "unlimited" => false,
+                     "balance" => nil
+                   }
+                 }
+               }
+             }
+           }
+         },
+         timestamp: DateTime.utc_now()
+       }}
+    )
+
+    snapshot = GenServer.call(pid, :snapshot)
+
+    assert snapshot.rate_limits == %{
+             plan_type: "priority",
+             primary: %{used_percent: 52.0, window_minutes: 300, resets_at: 1_772_989_880},
+             secondary: %{used_percent: 66.0, window_minutes: 10_080, resets_at: 1_773_468_681},
+             credits: %{has_credits: false, unlimited: false, balance: nil}
+           }
+  end
+
+  test "orchestrator snapshot normalizes account rate limits updated payloads" do
+    issue_id = "issue-rate-limit-account-update"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-221B",
+      title: "Account rate limit update test",
+      description: "Capture account/rateLimits/updated payloads",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-221B"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :AccountRateLimitOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+    process_ref = make_ref()
+    started_at = DateTime.utc_now()
+
+    running_entry = %{
+      pid: self(),
+      ref: process_ref,
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: nil,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      codex_last_reported_input_tokens: 0,
+      codex_last_reported_output_tokens: 0,
+      codex_last_reported_total_tokens: 0,
+      started_at: started_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         payload: %{
+           "method" => "account/rateLimits/updated",
+           "params" => %{
+             "rateLimits" => %{
+               "planType" => "priority",
+               "primary" => %{
+                 "usedPercent" => 43,
+                 "windowDurationMins" => 300,
+                 "resetsAt" => 1_772_989_880
+               },
+               "secondary" => %{
+                 "usedPercent" => 64,
+                 "windowDurationMins" => 10_080,
+                 "resetsAt" => 1_773_468_681
+               },
+               "credits" => %{
+                 "hasCredits" => false,
+                 "unlimited" => false,
+                 "balance" => nil
+               }
+             }
+           }
+         },
+         timestamp: DateTime.utc_now()
+       }}
+    )
+
+    snapshot = GenServer.call(pid, :snapshot)
+
+    assert snapshot.rate_limits == %{
+             plan_type: "priority",
+             primary: %{used_percent: 43, window_minutes: 300, resets_at: 1_772_989_880},
+             secondary: %{used_percent: 64, window_minutes: 10_080, resets_at: 1_773_468_681},
+             credits: %{has_credits: false, unlimited: false, balance: nil}
+           }
   end
 
   test "orchestrator token accounting prefers total_token_usage over last_token_usage in token_count payloads" do

@@ -412,6 +412,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              "logs" => %{
                "path" => log_path,
                "available" => true,
+               "source_paths" => [log_path],
                "truncated" => false,
                "lines" => ["info booted", "warn retrying issue"]
              }
@@ -649,6 +650,64 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert_eventually(fn ->
       render(view) =~ "Agent 内容流：structured update"
     end)
+  end
+
+  test "dashboard liveview renders camelCase rate limits and wrapped log sources" do
+    orchestrator_name = Module.concat(__MODULE__, :DashboardCamelCaseRateLimitOrchestrator)
+
+    snapshot =
+      static_snapshot()
+      |> Map.put(:rate_limits, %{
+        "planType" => "priority",
+        "primary" => %{
+          "usedPercent" => 52,
+          "windowDurationMins" => 300,
+          "resetsAt" => 1
+        },
+        "secondary" => %{
+          "usedPercent" => 66,
+          "windowDurationMins" => 10_080,
+          "resetsAt" => 2
+        }
+      })
+
+    log_root = Path.join(System.tmp_dir!(), "symphony-dashboard-wrap-logs-#{System.unique_integer([:positive])}")
+    log_path = Path.join(log_root, "log/symphony.log")
+    wrapped_log_path = log_path <> ".1"
+    File.mkdir_p!(Path.dirname(log_path))
+    File.write!(wrapped_log_path, "wrap-dashboard-1\nwrap-dashboard-2\n")
+
+    previous_log_file = Application.get_env(:symphony_elixir, :log_file)
+
+    on_exit(fn ->
+      if is_nil(previous_log_file) do
+        Application.delete_env(:symphony_elixir, :log_file)
+      else
+        Application.put_env(:symphony_elixir, :log_file, previous_log_file)
+      end
+
+      File.rm_rf(log_root)
+    end)
+
+    Application.put_env(:symphony_elixir, :log_file, log_path)
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _logs_view, logs_html} = live(build_conn(), "/panel/logs")
+    assert logs_html =~ log_path
+    assert logs_html =~ wrapped_log_path
+    assert logs_html =~ "wrap-dashboard-1"
+    assert logs_html =~ "wrap-dashboard-2"
+
+    {:ok, _home_view, home_html} = live(build_conn(), "/")
+    assert home_html =~ "priority"
+    assert home_html =~ "52%"
+    assert home_html =~ "5小时窗口"
+    assert home_html =~ "重置 1970-01-01 00:00:01Z"
+    assert home_html =~ "66%"
+    assert home_html =~ "7天窗口"
+    assert home_html =~ "重置 1970-01-01 00:00:02Z"
   end
 
   test "dashboard exposes a config panel that edits and saves WORKFLOW.md" do

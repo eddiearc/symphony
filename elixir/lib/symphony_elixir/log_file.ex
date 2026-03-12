@@ -30,6 +30,7 @@ defmodule SymphonyElixir.LogFile do
   @spec recent_log_view(keyword()) :: %{
           path: Path.t(),
           available: boolean(),
+          source_paths: [Path.t()],
           lines: [String.t()],
           truncated: boolean()
         }
@@ -38,24 +39,26 @@ defmodule SymphonyElixir.LogFile do
     line_limit = Keyword.get(opts, :line_limit, 80)
     byte_limit = Keyword.get(opts, :byte_limit, 64 * 1024)
 
-    case File.stat(path) do
-      {:ok, %File.Stat{size: size}} ->
-        data = read_tail_bytes(path, size, byte_limit)
-        {lines, truncated} = tail_lines(data, size, line_limit, byte_limit)
+    case resolve_log_sources(path) do
+      {_total_size, []} ->
+        %{
+          path: path,
+          available: false,
+          source_paths: [],
+          lines: [],
+          truncated: false
+        }
+
+      {total_size, source_paths} ->
+        data = read_tail_bytes_from_sources(source_paths, byte_limit)
+        {lines, truncated} = tail_lines(data, total_size, line_limit, byte_limit)
 
         %{
           path: path,
           available: true,
+          source_paths: source_paths,
           lines: lines,
           truncated: truncated
-        }
-
-      {:error, _reason} ->
-        %{
-          path: path,
-          available: false,
-          lines: [],
-          truncated: false
         }
     end
   end
@@ -132,6 +135,86 @@ defmodule SymphonyElixir.LogFile do
     after
       :ok = :file.close(device)
     end
+  end
+
+  defp resolve_log_sources(path) do
+    case File.stat(path) do
+      {:ok, %File.Stat{size: size}} ->
+        {size, [path]}
+
+      {:error, _reason} ->
+        wrapped_log_sources(path)
+    end
+  end
+
+  defp wrapped_log_sources(path) do
+    source_paths =
+      path
+      |> discover_wrapped_log_paths()
+      |> Enum.sort_by(&log_path_mtime/1, :asc)
+
+    total_size =
+      Enum.reduce(source_paths, 0, fn source_path, total ->
+        case File.stat(source_path) do
+          {:ok, %File.Stat{size: size}} -> total + size
+          {:error, _reason} -> total
+        end
+      end)
+
+    {total_size, source_paths}
+  end
+
+  defp discover_wrapped_log_paths(path) do
+    wildcard = path <> ".*"
+
+    Path.wildcard(wildcard)
+    |> Enum.filter(&numeric_log_suffix?(&1, path))
+  end
+
+  defp numeric_log_suffix?(candidate, path) do
+    prefix = path <> "."
+
+    String.starts_with?(candidate, prefix) and
+      case String.replace_prefix(candidate, prefix, "") do
+        suffix when suffix != "" -> String.match?(suffix, ~r/^\d+$/)
+        _ -> false
+      end
+  end
+
+  defp log_path_mtime(path) do
+    case File.stat(path) do
+      {:ok, %File.Stat{mtime: mtime}} ->
+        NaiveDateTime.from_erl!(mtime)
+
+      {:error, _reason} ->
+        ~N[1970-01-01 00:00:00]
+    end
+  end
+
+  defp read_tail_bytes_from_sources(source_paths, byte_limit) do
+    {chunks, _remaining} =
+      Enum.reduce(Enum.reverse(source_paths), {[], byte_limit}, fn source_path, {chunks, remaining} ->
+        if remaining <= 0 do
+          {chunks, remaining}
+        else
+          size =
+            case File.stat(source_path) do
+              {:ok, %File.Stat{size: source_size}} -> source_size
+              {:error, _reason} -> 0
+            end
+
+          chunk =
+            if size > 0 do
+              read_tail_bytes(source_path, size, remaining)
+            else
+              ""
+            end
+
+          {[chunk | chunks], max(remaining - byte_size(chunk), 0)}
+        end
+      end)
+
+    IO.iodata_to_binary(chunks)
   end
 
   defp tail_lines(data, size, line_limit, byte_limit) do
