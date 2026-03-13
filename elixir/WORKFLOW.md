@@ -161,6 +161,7 @@ agent 必须能够与 Linear 通信，可以通过已配置的 Linear MCP server
     - 不要包含已经能从 Linear issue 字段直接推断出的元数据（`issue ID`、`status`、`branch`、`PR link`）。
 6. 在同一条评论中，以 checklist 形式补充明确的验收标准和 TODO。
     - 如果改动对用户可见，必须加入一条 UI walkthrough 验收标准，描述需要端到端验证的用户路径。
+    - 如果该 UI walkthrough 涉及用户可见界面，必须产出可审阅的截图或短视频，并上传到对应 Linear issue；不要只把媒体留在本地、终端输出、PR 评论或 workpad 中。
     - 如果改动触及 WorkCow app 文件或应用行为，必须在 workpad 的 `Acceptance Criteria` 中加入明确的 app 级流程检查（启动/构建路径、被修改的交互路径、期望结果路径，以及相关 workspace 影响）。
     - 如果 ticket 描述或评论上下文中包含 `Validation`、`Test Plan` 或 `Testing` 章节，则必须将其要求复制进 workpad 的 `Acceptance Criteria` 和 `Validation` 章节，并以必选 checkbox 形式保留（不能降级成可选）。
 7. 以 principal 风格对计划做一次自审，并在评论中继续打磨。
@@ -221,9 +222,11 @@ agent 必须能够与 Linear 通信，可以通过已配置的 Linear MCP server
     - 所有临时 proof edit 都必须在 commit/push 之前恢复。
     - 这些临时 proof 步骤和结果必须记录到 workpad 的 `Validation` / `Notes` 中，方便 reviewer 跟踪证据链。
     - 如果改动触及 app，且工单变更了用户可见的桌面路径，则必须执行最接近实际的 WorkCow runtime proof：优先相关 Playwright / Electron 覆盖；若不可用，则至少执行本地启动/构建验证，例如 `pnpm dev`、`pnpm build && pnpm start`，或其他更窄的 runtime 检查。把精确命令和观察结果记录到 workpad 中。
+    - 只要验证产出了对 reviewer 有帮助的截图或视频，就必须将这些媒体上传到对应 Linear issue（优先 attachment），并在 workpad 中简要注明媒体覆盖的用户路径/场景。
 6. 再次核对所有验收标准，补齐任何缺口。
 7. 每次尝试 `git push` 之前，都必须运行当前 scope 所需的验证，并确认通过；若失败，则修复并反复重跑直到为绿色，然后再 commit 和 push。
 8. 将 PR URL 附到 issue 上（优先使用 attachment；只有 attachment 不可用时才写进 workpad 评论）。
+    - 对用户可见改动生成的审阅截图/视频，也同样优先作为 attachment 上传到同一条 Linear issue；只有 attachment 实在不可用时，才在 workpad 中记录替代位置。
     - 确保 GitHub PR 带有 `symphony` label（缺失则补上）。
 9. 将最新 `origin/main` 合并进当前分支，解决冲突，并重新跑检查。
 10. 用最终 checklist 状态和验证说明更新 workpad 评论。
@@ -275,7 +278,7 @@ agent 必须能够与 Linear 通信，可以通过已配置的 Linear MCP server
 - PR feedback sweep 已完成，且不存在任何未解决的可执行评论。
 - PR checks 为绿色，分支已推送，且 PR 已在 issue 上建立关联。
 - 必需的 PR 元数据已具备（`symphony` label）。
-- 如果改动触及 app，则 `App runtime validation (required)` 中的 runtime 验证/媒体要求已完成。
+- 如果改动触及 app，则 `App runtime validation (required)` 中的 runtime 验证/媒体要求已完成，且截图/视频已上传到对应 Linear issue。
 
 ## Guardrails
 
