@@ -171,6 +171,84 @@ defmodule SymphonyElixir.CoreTest do
     assert pipeline.tracker.project_slug == "legacy-project"
   end
 
+  test "pipeline loader reads pipelines directory layout" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-pipeline-loader-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      pipelines_root = Path.join(root, "pipelines")
+      workcow_dir = Path.join(pipelines_root, "workcow")
+      repo_b_dir = Path.join(pipelines_root, "repo-b")
+
+      File.mkdir_p!(workcow_dir)
+      File.mkdir_p!(repo_b_dir)
+
+      File.write!(
+        Path.join(workcow_dir, "pipeline.yaml"),
+        """
+        id: "workcow"
+        enabled: true
+        tracker:
+          kind: "linear"
+          api_key: "token-a"
+          project_slug: "workcow-project"
+        """
+      )
+
+      File.write!(Path.join(workcow_dir, "WORKFLOW.md"), "Workcow prompt\n")
+
+      File.write!(
+        Path.join(repo_b_dir, "pipeline.yaml"),
+        """
+        id: "repo-b"
+        enabled: false
+        tracker:
+          kind: "linear"
+          api_key: "token-b"
+          project_slug: "repo-b-project"
+        """
+      )
+
+      File.write!(Path.join(repo_b_dir, "WORKFLOW.md"), "Repo B prompt\n")
+
+      assert {:ok, pipelines} = SymphonyElixir.PipelineLoader.load(pipelines_root)
+      assert Enum.map(pipelines, & &1.id) == ["repo-b", "workcow"]
+
+      assert workcow = Enum.find(pipelines, &(&1.id == "workcow"))
+      assert workcow.workflow_path == Path.join(workcow_dir, "WORKFLOW.md")
+      assert workcow.source_path == workcow_dir
+      assert workcow.prompt_template == "Workcow prompt"
+      assert workcow.enabled == true
+
+      assert repo_b = Enum.find(pipelines, &(&1.id == "repo-b"))
+      assert repo_b.workflow_path == Path.join(repo_b_dir, "WORKFLOW.md")
+      assert repo_b.source_path == repo_b_dir
+      assert repo_b.prompt_template == "Repo B prompt"
+      assert repo_b.enabled == false
+    after
+      File.rm_rf(root)
+    end
+  end
+
+  test "pipeline loader accepts explicit legacy workflow file path" do
+    workflow_path = Workflow.workflow_file_path()
+
+    write_workflow_file!(workflow_path,
+      tracker_project_slug: "legacy-project",
+      prompt: "Legacy prompt template"
+    )
+
+    assert {:ok, [pipeline]} = SymphonyElixir.PipelineLoader.load(workflow_path)
+    assert pipeline.id == "default"
+    assert pipeline.workflow_path == workflow_path
+    assert pipeline.source_path == workflow_path
+    assert pipeline.prompt_template == "Legacy prompt template"
+    assert pipeline.tracker.project_slug == "legacy-project"
+  end
+
   test "current WORKFLOW.md file is valid and complete" do
     original_workflow_path = Workflow.workflow_file_path()
     on_exit(fn -> Workflow.set_workflow_file_path(original_workflow_path) end)

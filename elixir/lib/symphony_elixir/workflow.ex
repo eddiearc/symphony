@@ -6,12 +6,19 @@ defmodule SymphonyElixir.Workflow do
   alias SymphonyElixir.WorkflowStore
 
   @workflow_file_name "WORKFLOW.md"
+  @pipelines_dir_name "pipelines"
   @top_level_key_order ["tracker", "polling", "workspace", "agent", "codex", "hooks", "observability", "server"]
 
   @spec workflow_file_path() :: Path.t()
   def workflow_file_path do
     Application.get_env(:symphony_elixir, :workflow_file_path) ||
       Path.join(File.cwd!(), @workflow_file_name)
+  end
+
+  @spec pipeline_root_path() :: Path.t()
+  def pipeline_root_path do
+    Application.get_env(:symphony_elixir, :pipeline_root_path) ||
+      Path.join(File.cwd!(), @pipelines_dir_name)
   end
 
   @spec set_workflow_file_path(Path.t()) :: :ok
@@ -21,9 +28,23 @@ defmodule SymphonyElixir.Workflow do
     :ok
   end
 
+  @spec set_pipeline_root_path(Path.t()) :: :ok
+  def set_pipeline_root_path(path) when is_binary(path) do
+    Application.put_env(:symphony_elixir, :pipeline_root_path, path)
+    maybe_reload_store()
+    :ok
+  end
+
   @spec clear_workflow_file_path() :: :ok
   def clear_workflow_file_path do
     Application.delete_env(:symphony_elixir, :workflow_file_path)
+    maybe_reload_store()
+    :ok
+  end
+
+  @spec clear_pipeline_root_path() :: :ok
+  def clear_pipeline_root_path do
+    Application.delete_env(:symphony_elixir, :pipeline_root_path)
     maybe_reload_store()
     :ok
   end

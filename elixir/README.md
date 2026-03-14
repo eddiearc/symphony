@@ -32,17 +32,17 @@ Symphony stops the active agent for that issue and cleans up matching workspaces
    [Harness engineering](https://openai.com/index/harness-engineering/).
 2. Get a new personal token in Linear via Settings → Security & access → Personal API keys, and
    set it as the `LINEAR_API_KEY` environment variable.
-3. Copy this directory's `WORKFLOW.md` to your repo.
-4. Optionally copy the `commit`, `push`, `pull`, `land`, and `linear` skills to your repo.
+3. Create a `pipelines/` directory in your target repo and add one subdirectory per project.
+4. In each pipeline directory, add:
+   - `pipeline.yaml` for structured runtime settings
+   - `WORKFLOW.md` for the prompt template used by Codex
+5. Enable exactly one pipeline for runtime boot today.
+   - Directory-based pipelines are now the primary configuration surface.
+   - The runtime is still single-workflow under the hood in this stage, so startup currently requires exactly one enabled pipeline. Multi-pipeline runtime comes in later orchestration work.
+6. Optionally copy the `commit`, `push`, `pull`, `land`, and `linear` skills to your repo.
    - The `linear` skill expects Symphony's `linear_graphql` app-server tool for raw Linear GraphQL
      operations such as comment editing or upload flows.
-5. Customize the copied `WORKFLOW.md` file for your project.
-   - To get your project's slug, right-click the project and copy its URL. The slug is part of the
-     URL.
-   - When creating a workflow based on this repo, note that it depends on non-standard Linear
-     issue statuses: "Rework", "Human Review", and "Merging". You can customize them in
-     Team Settings → Workflow in Linear.
-6. Follow the instructions below to install the required runtime dependencies and start the service.
+7. Follow the instructions below to install dependencies and start the service.
 
 ## Prerequisites
 
@@ -66,30 +66,59 @@ mise exec -- make run
 
 `make run` rebuilds `bin/symphony` before launch and starts the dashboard on
 `http://127.0.0.1:4000/` by default so the running service matches the current source tree.
-Override the workflow path or dashboard port as needed:
+Override the pipeline root or dashboard port as needed:
 
 ```bash
-mise exec -- make run WORKFLOW=/path/to/custom/WORKFLOW.md
+mise exec -- make run WORKFLOW=/path/to/pipelines
 mise exec -- make run PORT=4100 WORKFLOW=/path/to/custom/WORKFLOW.md
 ```
 
 ## Configuration
 
-Pass a custom workflow file path to `./bin/symphony` when starting the service:
+Pass either a pipeline root directory or a legacy workflow file to `./bin/symphony`:
 
 ```bash
+./bin/symphony /path/to/pipelines
 ./bin/symphony /path/to/custom/WORKFLOW.md
 ```
 
-If no path is passed, Symphony defaults to `./WORKFLOW.md`.
+If no path is passed, Symphony resolves startup target in this order:
+1. `./pipelines` if the directory exists
+2. `./WORKFLOW.md` (legacy compatibility mode)
 
 Optional flags:
 
 - `--logs-root` tells Symphony to write logs under a different directory (default: `./log`)
 - `--port` also starts the Phoenix observability service (default: disabled)
 
-The `WORKFLOW.md` file uses YAML front matter for configuration, plus a Markdown body used as the
-Codex session prompt.
+### Primary mode: `pipelines/` directory
+
+Supported layout:
+
+```text
+pipelines/
+  workcow/
+    pipeline.yaml
+    WORKFLOW.md
+  repo-b/
+    pipeline.yaml
+    WORKFLOW.md
+```
+
+`pipeline.yaml` contains structured runtime settings; `WORKFLOW.md` contains the pipeline prompt.
+
+Current runtime constraint:
+- Symphony validates every enabled pipeline in the directory.
+- Symphony only boots from pipeline-root mode when there is exactly one enabled pipeline.
+- If zero or multiple enabled pipelines are present, startup fails with an actionable error instead of silently choosing one.
+
+### Legacy compatibility mode: single `WORKFLOW.md`
+
+Legacy mode is still supported for incremental migration. In this mode, Symphony treats the file as
+a synthetic default pipeline (`id: default`).
+
+The legacy `WORKFLOW.md` format uses YAML front matter for configuration, plus a Markdown body used
+as the Codex session prompt.
 
 Minimal example:
 
@@ -153,7 +182,7 @@ codex:
   command: "$CODEX_BIN app-server --model gpt-5.3-codex"
 ```
 
-- If `WORKFLOW.md` is missing or has invalid YAML at startup, Symphony does not boot.
+- If the selected pipeline root/workflow source is missing or invalid at startup, Symphony does not boot.
 - If a later reload fails, Symphony keeps running with the last known good workflow and logs the
   reload error until the file is fixed.
 - `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API at
