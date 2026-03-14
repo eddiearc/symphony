@@ -88,6 +88,89 @@ defmodule SymphonyElixir.CoreTest do
     assert {:error, {:unsupported_tracker_kind, "123"}} = Config.validate!()
   end
 
+  test "pipeline parse accepts pipeline-scoped runtime sections" do
+    pipeline_config = %{
+      "id" => "workcow",
+      "enabled" => true,
+      "source_path" => "/tmp/pipelines/workcow",
+      "workflow_path" => "/tmp/pipelines/workcow/WORKFLOW.md",
+      "prompt_template" => "Pipeline prompt",
+      "tracker" => %{
+        "kind" => "linear",
+        "api_key" => "token-a",
+        "project_slug" => "project-a",
+        "active_states" => ["Todo", "In Progress"],
+        "terminal_states" => ["Done", "Canceled"]
+      },
+      "workspace" => %{
+        "root" => "/tmp/workspaces-a"
+      },
+      "agent" => %{
+        "max_concurrent_agents" => 2,
+        "max_turns" => 3
+      },
+      "codex" => %{
+        "command" => "codex app-server"
+      },
+      "hooks" => %{
+        "after_create" => "echo bootstrap"
+      }
+    }
+
+    assert {:ok, pipeline} = SymphonyElixir.Pipeline.parse(pipeline_config)
+    assert pipeline.id == "workcow"
+    assert pipeline.enabled == true
+    assert pipeline.source_path == "/tmp/pipelines/workcow"
+    assert pipeline.workflow_path == "/tmp/pipelines/workcow/WORKFLOW.md"
+    assert pipeline.prompt_template == "Pipeline prompt"
+    assert pipeline.tracker.project_slug == "project-a"
+    assert pipeline.workspace.root == "/tmp/workspaces-a"
+    assert pipeline.agent.max_concurrent_agents == 2
+    assert pipeline.agent.max_turns == 3
+    assert pipeline.hooks.after_create == "echo bootstrap"
+  end
+
+  test "pipeline validation checks project scope per pipeline" do
+    assert {:ok, valid_pipeline} =
+             SymphonyElixir.Pipeline.parse(%{
+               "id" => "project-a",
+               "tracker" => %{
+                 "kind" => "linear",
+                 "api_key" => "token-a",
+                 "project_slug" => "project-a"
+               }
+             })
+
+    assert {:ok, missing_slug_pipeline} =
+             SymphonyElixir.Pipeline.parse(%{
+               "id" => "project-b",
+               "tracker" => %{
+                 "kind" => "linear",
+                 "api_key" => "token-b",
+                 "project_slug" => nil
+               }
+             })
+
+    assert :ok = Config.validate_pipeline(valid_pipeline)
+    assert {:error, :missing_linear_project_slug} = Config.validate_pipeline(missing_slug_pipeline)
+  end
+
+  test "legacy WORKFLOW.md remains compatible through a synthetic default pipeline" do
+    workflow_path = Workflow.workflow_file_path()
+
+    write_workflow_file!(workflow_path,
+      tracker_project_slug: "legacy-project",
+      prompt: "Legacy prompt template"
+    )
+
+    assert {:ok, pipeline} = Config.current_pipeline()
+    assert pipeline.id == "default"
+    assert pipeline.source_path == workflow_path
+    assert pipeline.workflow_path == workflow_path
+    assert pipeline.prompt_template == "Legacy prompt template"
+    assert pipeline.tracker.project_slug == "legacy-project"
+  end
+
   test "current WORKFLOW.md file is valid and complete" do
     original_workflow_path = Workflow.workflow_file_path()
     on_exit(fn -> Workflow.set_workflow_file_path(original_workflow_path) end)

@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Config do
   """
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Workflow
+  alias SymphonyElixir.{Pipeline, PipelineStore, Workflow}
 
   @default_prompt_template """
   You are working on a Linear issue.
@@ -93,16 +93,51 @@ defmodule SymphonyElixir.Config do
 
   @spec linear_project_slug() :: String.t() | nil
   def linear_project_slug do
-    case settings() do
-      {:ok, settings} -> settings.tracker.project_slug
+    case current_pipeline() do
+      {:ok, pipeline} -> pipeline.tracker.project_slug
       {:error, _reason} -> nil
     end
   end
 
+  @spec current_pipeline() :: {:ok, Pipeline.t()} | {:error, term()}
+  def current_pipeline do
+    case PipelineStore.current() do
+      {:error, {:invalid_pipeline_config, message}} ->
+        {:error, {:invalid_workflow_config, message}}
+
+      other ->
+        other
+    end
+  end
+
+  @spec validate_pipeline(Pipeline.t()) :: :ok | {:error, term()}
+  def validate_pipeline(%Pipeline{} = pipeline) do
+    tracker = pipeline.tracker
+
+    cond do
+      is_nil(tracker.kind) ->
+        {:error, :missing_tracker_kind}
+
+      tracker.kind not in ["linear", "memory"] ->
+        {:error, {:unsupported_tracker_kind, tracker.kind}}
+
+      tracker.kind == "linear" and not is_binary(tracker.api_key) ->
+        {:error, :missing_linear_api_token}
+
+      tracker.kind == "linear" and not is_binary(tracker.project_slug) ->
+        {:error, :missing_linear_project_slug}
+
+      true ->
+        :ok
+    end
+  end
+
+  def validate_pipeline(_pipeline), do: {:error, :invalid_pipeline}
+
   @spec validate!() :: :ok | {:error, term()}
   def validate! do
-    with {:ok, settings} <- settings() do
-      validate_semantics(settings)
+    with {:ok, pipeline} <- current_pipeline() do
+      validate_pipeline(pipeline)
     end
   end
 
@@ -118,25 +153,6 @@ defmodule SymphonyElixir.Config do
            turn_sandbox_policy: turn_sandbox_policy
          }}
       end
-    end
-  end
-
-  defp validate_semantics(settings) do
-    cond do
-      is_nil(settings.tracker.kind) ->
-        {:error, :missing_tracker_kind}
-
-      settings.tracker.kind not in ["linear", "memory"] ->
-        {:error, {:unsupported_tracker_kind, settings.tracker.kind}}
-
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.api_key) ->
-        {:error, :missing_linear_api_token}
-
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.project_slug) ->
-        {:error, :missing_linear_project_slug}
-
-      true ->
-        :ok
     end
   end
 
