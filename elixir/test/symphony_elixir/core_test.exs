@@ -447,6 +447,29 @@ defmodule SymphonyElixir.CoreTest do
     GenServer.stop(pid)
   end
 
+  test "pipeline supervisor falls back to the synthetic default pipeline in legacy mode" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+
+    supervisor_name = Module.concat(__MODULE__, :LegacyPipelineSupervisor)
+    registry_name = Module.concat(__MODULE__, :LegacyPipelineRegistry)
+
+    {:ok, supervisor_pid} =
+      SymphonyElixir.PipelineSupervisor.start_link(
+        name: supervisor_name,
+        registry_name: registry_name
+      )
+
+    on_exit(fn ->
+      if Process.alive?(supervisor_pid) do
+        Process.exit(supervisor_pid, :normal)
+      end
+    end)
+
+    assert {:ok, pid} = wait_for_pipeline_lookup(registry_name, "default")
+    assert is_pid(pid)
+  end
+
   test "linear issue state reconciliation fetch with no running issues is a no-op" do
     assert {:ok, pipeline} =
              SymphonyElixir.Pipeline.parse(%{
@@ -2029,6 +2052,26 @@ defmodule SymphonyElixir.CoreTest do
              end)
     after
       File.rm_rf(test_root)
+    end
+  end
+
+  defp wait_for_pipeline_lookup(registry_name, pipeline_id, timeout_ms \\ 200) do
+    deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_pipeline_lookup(registry_name, pipeline_id, deadline_ms)
+  end
+
+  defp do_wait_for_pipeline_lookup(registry_name, pipeline_id, deadline_ms) do
+    case SymphonyElixir.PipelineSupervisor.lookup(pipeline_id, registry_name) do
+      {:ok, pid} when is_pid(pid) ->
+        {:ok, pid}
+
+      _ ->
+        if System.monotonic_time(:millisecond) >= deadline_ms do
+          flunk("timed out waiting for legacy pipeline orchestrator #{pipeline_id}")
+        else
+          Process.sleep(5)
+          do_wait_for_pipeline_lookup(registry_name, pipeline_id, deadline_ms)
+        end
     end
   end
 end

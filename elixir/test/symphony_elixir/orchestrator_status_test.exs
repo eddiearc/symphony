@@ -1733,6 +1733,76 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert StatusDashboard.humanize_codex_message(fallback_reasoning) == "reasoning update"
   end
 
+  test "pipeline supervisor starts one orchestrator per pipeline and restarts failures in isolation" do
+    supervisor_name = Module.concat(__MODULE__, :MultiPipelineSupervisor)
+    registry_name = Module.concat(__MODULE__, :MultiPipelineRegistry)
+
+    pipeline_a = pipeline_fixture("pipeline-a")
+    pipeline_b = pipeline_fixture("pipeline-b")
+
+    {:ok, supervisor_pid} =
+      SymphonyElixir.PipelineSupervisor.start_link(
+        name: supervisor_name,
+        registry_name: registry_name,
+        pipelines: [pipeline_a, pipeline_b]
+      )
+
+    on_exit(fn ->
+      if Process.alive?(supervisor_pid) do
+        Process.exit(supervisor_pid, :normal)
+      end
+    end)
+
+    assert {:ok, pid_a} = wait_for_pipeline_lookup(registry_name, "pipeline-a")
+    assert {:ok, pid_b} = wait_for_pipeline_lookup(registry_name, "pipeline-b")
+    refute pid_a == pid_b
+
+    issue_id = "issue-pipeline-a"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-PA",
+      title: "Pipeline A",
+      description: "One orchestrator should not leak into another",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-PA"
+    }
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: nil,
+      turn_count: 0,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      codex_app_server_pid: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid_a, fn state ->
+      state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(state.claimed, issue_id))
+    end)
+
+    assert %{running: [%{issue_id: ^issue_id}]} = Orchestrator.snapshot(pid_a, 50)
+    assert %{running: []} = Orchestrator.snapshot(pid_b, 50)
+
+    Process.exit(pid_a, :kill)
+
+    assert {:ok, restarted_pid_a} =
+             wait_for_restarted_pipeline_lookup(registry_name, "pipeline-a", pid_a, 1_000)
+
+    refute restarted_pid_a == pid_a
+    assert {:ok, ^pid_b} = SymphonyElixir.PipelineSupervisor.lookup("pipeline-b", registry_name)
+  end
+
   test "application stop renders offline status" do
     rendered =
       ExUnit.CaptureIO.capture_io(fn ->
@@ -1791,5 +1861,55 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       {next_tokens, [{timestamp, next_tokens} | acc]}
     end)
     |> elem(1)
+  end
+
+  defp wait_for_pipeline_lookup(registry_name, pipeline_id, timeout_ms \\ 200) do
+    deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_pipeline_lookup(registry_name, pipeline_id, deadline_ms)
+  end
+
+  defp wait_for_restarted_pipeline_lookup(registry_name, pipeline_id, previous_pid, timeout_ms) do
+    deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_restarted_pipeline_lookup(registry_name, pipeline_id, previous_pid, deadline_ms)
+  end
+
+  defp do_wait_for_pipeline_lookup(registry_name, pipeline_id, deadline_ms) do
+    case SymphonyElixir.PipelineSupervisor.lookup(pipeline_id, registry_name) do
+      {:ok, pid} when is_pid(pid) ->
+        {:ok, pid}
+
+      _ ->
+        if System.monotonic_time(:millisecond) >= deadline_ms do
+          flunk("timed out waiting for pipeline orchestrator #{pipeline_id}")
+        else
+          Process.sleep(5)
+          do_wait_for_pipeline_lookup(registry_name, pipeline_id, deadline_ms)
+        end
+    end
+  end
+
+  defp do_wait_for_restarted_pipeline_lookup(registry_name, pipeline_id, previous_pid, deadline_ms) do
+    case SymphonyElixir.PipelineSupervisor.lookup(pipeline_id, registry_name) do
+      {:ok, pid} when is_pid(pid) and pid != previous_pid ->
+        {:ok, pid}
+
+      _ ->
+        if System.monotonic_time(:millisecond) >= deadline_ms do
+          flunk("timed out waiting for restarted pipeline orchestrator #{pipeline_id}")
+        else
+          Process.sleep(5)
+          do_wait_for_restarted_pipeline_lookup(registry_name, pipeline_id, previous_pid, deadline_ms)
+        end
+    end
+  end
+
+  defp pipeline_fixture(id) do
+    assert {:ok, pipeline} =
+             SymphonyElixir.Pipeline.parse(%{
+               "id" => id,
+               "tracker" => %{"kind" => "memory"}
+             })
+
+    pipeline
   end
 end
