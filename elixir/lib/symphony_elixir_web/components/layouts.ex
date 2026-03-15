@@ -35,7 +35,7 @@ defmodule SymphonyElixirWeb.Layouts do
                 var self = this;
 
                 this.submitHandler = function (event) {
-                  var message = self.el.dataset.confirmMessage || "确认保存当前 WORKFLOW.md 吗？";
+                  var message = self.el.dataset.confirmMessage || "确认保存当前配置吗？";
 
                   if (!window.confirm(message)) {
                     event.preventDefault();

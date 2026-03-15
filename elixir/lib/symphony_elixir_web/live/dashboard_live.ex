@@ -195,7 +195,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
               >
                 <span class="control-nav-eyebrow">Configure</span>
                 <strong>配置区</strong>
-                <span>编辑 `WORKFLOW.md`，保存前确认改动范围，并热重载后端。</span>
+                <span>按 pipeline 管理运行配置，保存前确认改动范围，并热重载编辑器。</span>
               </.link>
               <.link
                 navigate={panel_path("logs")}
