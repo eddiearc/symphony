@@ -38,6 +38,11 @@ defmodule SymphonyElixirWeb.DashboardLive do
       |> assign(:panel, normalize_panel(Map.get(params || %{}, "panel")))
       |> assign(:selected_pipeline_id, nil)
       |> assign(:config_view, "structured")
+      |> assign(:pipeline_root_path, Workflow.pipeline_root_path())
+      |> assign(:pipeline_root_available, File.dir?(Workflow.pipeline_root_path()))
+      |> assign(:new_pipeline_form_open, false)
+      |> assign(:new_pipeline_form, new_pipeline_form_defaults())
+      |> assign(:new_pipeline_feedback, nil)
       |> assign(:workflow_feedback, nil)
       |> assign_workflow_editor()
 
@@ -138,6 +143,59 @@ defmodule SymphonyElixirWeb.DashboardLive do
      |> assign(:selected_pipeline_id, pipeline_id)
      |> assign_workflow_editor()
      |> assign(:panel, "config")}
+  end
+
+  def handle_event("open_new_pipeline_form", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:new_pipeline_form_open, true)
+     |> assign(:new_pipeline_form, new_pipeline_form_defaults())
+     |> assign(:new_pipeline_feedback, nil)
+     |> assign(:panel, "config")}
+  end
+
+  def handle_event("cancel_new_pipeline_form", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:new_pipeline_form_open, false)
+     |> assign(:new_pipeline_form, new_pipeline_form_defaults())
+     |> assign(:new_pipeline_feedback, nil)
+     |> assign(:panel, "config")}
+  end
+
+  def handle_event("new_pipeline_form_changed", %{"new_pipeline" => params}, socket) do
+    {:noreply,
+     socket
+     |> assign(:new_pipeline_form, merge_new_pipeline_form(params))
+     |> assign(:new_pipeline_feedback, nil)
+     |> assign(:panel, "config")}
+  end
+
+  def handle_event("create_pipeline", %{"new_pipeline" => params}, socket) do
+    form = merge_new_pipeline_form(params)
+
+    case scaffold_pipeline(socket.assigns.pipeline_root_path, form) do
+      {:ok, pipeline_id} ->
+        feedback = %{kind: :ok, message: "已创建并装载新的 pipeline。"}
+
+        {:noreply,
+         socket
+         |> assign(:selected_pipeline_id, pipeline_id)
+         |> assign(:new_pipeline_form_open, false)
+         |> assign(:new_pipeline_form, new_pipeline_form_defaults())
+         |> assign(:new_pipeline_feedback, nil)
+         |> assign(:payload, load_payload())
+         |> assign_workflow_editor(feedback: feedback)
+         |> assign(:panel, "config")}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:new_pipeline_form_open, true)
+         |> assign(:new_pipeline_form, form)
+         |> assign(:new_pipeline_feedback, %{kind: :error, message: format_new_pipeline_reason(reason)})
+         |> assign(:panel, "config")}
+    end
   end
 
   def handle_event("switch_config_view", %{"view" => view}, socket) do
@@ -314,14 +372,89 @@ defmodule SymphonyElixirWeb.DashboardLive do
                   </div>
                 </div>
 
-                <section :if={show_config_pipeline_switcher?(@config_pipelines)} class="config-pipeline-switcher">
+                <section :if={@pipeline_root_available} class="config-pipeline-switcher">
                   <div class="section-header">
                     <div>
                       <p class="section-kicker">pipelines</p>
                       <h2 class="section-title">托管管线</h2>
-                      <p class="section-copy">配置区现在按 pipeline 维度编辑，每条管线都维护自己的 `pipeline.yaml` 和 `WORKFLOW.md`。</p>
+                      <p class="section-copy">配置区现在按 pipeline 维度编辑；你可以在这里切换现有管线，也可以直接新增最小可运行 pipeline。</p>
+                    </div>
+
+                    <div class="editor-actions">
+                      <button
+                        id="open-new-pipeline"
+                        type="button"
+                        class="secondary"
+                        phx-click="open_new_pipeline_form"
+                      >
+                        + New Pipeline
+                      </button>
                     </div>
                   </div>
+
+                  <div :if={@new_pipeline_feedback} class={workflow_feedback_class(@new_pipeline_feedback.kind)}>
+                    <strong><%= workflow_feedback_title(@new_pipeline_feedback.kind) %></strong>
+                    <span><%= @new_pipeline_feedback.message %></span>
+                  </div>
+
+                  <section :if={@new_pipeline_form_open} class="section-card">
+                    <div class="section-header">
+                      <div>
+                        <p class="section-kicker">create</p>
+                        <h3 class="section-title">Create Pipeline</h3>
+                        <p class="section-copy">先创建最小可运行配置，后续再补高级项。</p>
+                      </div>
+                    </div>
+
+                    <form
+                      id="pipeline-create-form"
+                      class="structured-form"
+                      phx-change="new_pipeline_form_changed"
+                      phx-submit="create_pipeline"
+                    >
+                      <div class="structured-grid">
+                        <section class="structured-card">
+                          <label class="structured-field">
+                            <span class="structured-label">pipeline id</span>
+                            <span class="structured-help">会同时作为目录名，建议使用小写字母、数字、`-` 或 `_`。</span>
+                            <input class="structured-input" type="text" name="new_pipeline[id]" value={Map.get(@new_pipeline_form, "id")} />
+                          </label>
+
+                          <label class="structured-field">
+                            <span class="structured-label">project slug</span>
+                            <span class="structured-help">这是这个 pipeline 默认连接的 Linear project slug。</span>
+                            <input class="structured-input" type="text" name="new_pipeline[tracker_project_slug]" value={Map.get(@new_pipeline_form, "tracker_project_slug")} />
+                          </label>
+
+                          <label class="structured-field">
+                            <span class="structured-label">enabled</span>
+                            <span class="structured-help">创建后默认启用；取消勾选则只落盘不参与调度。</span>
+                            <input type="hidden" name="new_pipeline[enabled]" value="false" />
+                            <input type="checkbox" name="new_pipeline[enabled]" value="true" checked={truthy_param?(Map.get(@new_pipeline_form, "enabled"))} />
+                          </label>
+
+                          <label class="structured-field">
+                            <span class="structured-label">prompt template</span>
+                            <span class="structured-help">先放最小 prompt，创建后可在右侧继续补全高级规则。</span>
+                            <textarea class="structured-textarea mono" name="new_pipeline[prompt_template]"><%= Map.get(@new_pipeline_form, "prompt_template") %></textarea>
+                          </label>
+
+                          <div class="editor-actions editor-actions-outside">
+                            <button type="button" class="secondary" phx-click="cancel_new_pipeline_form">
+                              Cancel
+                            </button>
+                            <button type="submit">
+                              Create Pipeline
+                            </button>
+                          </div>
+                        </section>
+                      </div>
+                    </form>
+                  </section>
+
+                  <p :if={@config_pipelines == []} class="workflow-empty-note">
+                    当前还没有已装载的 pipeline，先创建一个最小配置即可。
+                  </p>
 
                   <div class="control-nav-list">
                     <button
@@ -1447,11 +1580,14 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp assign_workflow_editor(socket, opts \\ []) do
     feedback = Keyword.get(opts, :feedback)
     {editor_mode, pipelines} = workflow_editor_catalog()
+    pipeline_root_path = Workflow.pipeline_root_path()
     selected_pipeline_id = selected_editor_pipeline_id(socket.assigns[:selected_pipeline_id], pipelines)
     target = workflow_target(editor_mode, pipelines, selected_pipeline_id)
 
     socket =
       socket
+      |> assign(:pipeline_root_path, pipeline_root_path)
+      |> assign(:pipeline_root_available, File.dir?(pipeline_root_path))
       |> assign(:config_pipelines, if(editor_mode == :pipeline, do: pipelines, else: []))
       |> assign(:selected_pipeline_id, selected_pipeline_id)
       |> assign(:workflow_target, target)
@@ -1855,11 +1991,112 @@ defmodule SymphonyElixirWeb.DashboardLive do
     |> Kernel.<>("\n")
   end
 
+  defp new_pipeline_form_defaults do
+    %{
+      "id" => "",
+      "tracker_project_slug" => "",
+      "prompt_template" => "",
+      "enabled" => "true"
+    }
+  end
+
+  defp merge_new_pipeline_form(params) when is_map(params) do
+    Map.merge(new_pipeline_form_defaults(), Map.take(params, Map.keys(new_pipeline_form_defaults())))
+  end
+
+  defp merge_new_pipeline_form(_params), do: new_pipeline_form_defaults()
+
+  defp truthy_param?(value) when value in [true, "true", "on", "1"], do: true
+  defp truthy_param?(_value), do: false
+
+  defp scaffold_pipeline(pipeline_root_path, form) when is_binary(pipeline_root_path) and is_map(form) do
+    with :ok <- validate_pipeline_root_path(pipeline_root_path),
+         {:ok, attrs} <- normalize_new_pipeline_attrs(form),
+         pipeline_dir = Path.join(pipeline_root_path, attrs.id),
+         :ok <- validate_new_pipeline_dir(pipeline_dir),
+         config = new_pipeline_config(attrs),
+         rendered_body = Workflow.render_content(config, attrs.prompt_template),
+         :ok <- File.mkdir_p(pipeline_dir),
+         :ok <-
+           File.write(
+             Path.join(pipeline_dir, "pipeline.yaml"),
+             extract_front_matter_yaml(rendered_body)
+           ),
+         :ok <- File.write(Path.join(pipeline_dir, "WORKFLOW.md"), prompt_file_content(attrs.prompt_template)) do
+      StatusDashboard.notify_update()
+      {:ok, attrs.id}
+    end
+  end
+
+  defp validate_pipeline_root_path(pipeline_root_path) when is_binary(pipeline_root_path) do
+    if File.dir?(pipeline_root_path) do
+      :ok
+    else
+      {:error, :pipeline_root_unavailable}
+    end
+  end
+
+  defp normalize_new_pipeline_attrs(form) when is_map(form) do
+    with {:ok, id} <- validate_new_pipeline_id(form["id"]),
+         {:ok, tracker_project_slug} <-
+           validate_required_text(form["tracker_project_slug"], :missing_pipeline_project_slug),
+         {:ok, prompt_template} <-
+           validate_required_text(form["prompt_template"], :missing_pipeline_prompt_template) do
+      {:ok,
+       %{
+         id: id,
+         tracker_project_slug: tracker_project_slug,
+         prompt_template: prompt_template,
+         enabled: truthy_param?(form["enabled"])
+       }}
+    end
+  end
+
+  defp validate_new_pipeline_id(value) when is_binary(value) do
+    trimmed = String.trim(value)
+
+    cond do
+      trimmed == "" ->
+        {:error, :missing_pipeline_id}
+
+      Regex.match?(~r/^[a-z0-9][a-z0-9_-]*$/, trimmed) ->
+        {:ok, trimmed}
+
+      true ->
+        {:error, :invalid_pipeline_id}
+    end
+  end
+
+  defp validate_new_pipeline_id(_value), do: {:error, :missing_pipeline_id}
+
+  defp validate_required_text(value, reason) when is_binary(value) do
+    trimmed = String.trim(value)
+    if trimmed == "", do: {:error, reason}, else: {:ok, trimmed}
+  end
+
+  defp validate_required_text(_value, reason), do: {:error, reason}
+
+  defp validate_new_pipeline_dir(pipeline_dir) when is_binary(pipeline_dir) do
+    if File.exists?(pipeline_dir) do
+      {:error, {:pipeline_already_exists, Path.basename(pipeline_dir)}}
+    else
+      :ok
+    end
+  end
+
+  defp new_pipeline_config(attrs) when is_map(attrs) do
+    %{
+      "id" => attrs.id,
+      "enabled" => attrs.enabled,
+      "tracker" => %{
+        "kind" => "linear",
+        "project_slug" => attrs.tracker_project_slug
+      }
+    }
+  end
+
   defp pipeline_editor_target?(%{mode: :pipeline}), do: true
   defp pipeline_editor_target?(_target), do: false
-
-  defp show_config_pipeline_switcher?(pipelines) when is_list(pipelines), do: length(pipelines) > 1
-  defp show_config_pipeline_switcher?(_pipelines), do: false
 
   defp workflow_editor_title(%{mode: :pipeline}, pipelines) when is_list(pipelines) and length(pipelines) > 1,
     do: "Pipeline 配置台"
@@ -2110,6 +2347,27 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp format_workflow_reason(other, _workflow_target),
     do: "无法保存 WORKFLOW.md: #{inspect(other)}"
+
+  defp format_new_pipeline_reason(:pipeline_root_unavailable),
+    do: "当前没有可写的 pipeline 根目录；请先用 pipeline 根目录启动 Symphony。"
+
+  defp format_new_pipeline_reason(:missing_pipeline_id),
+    do: "请输入 pipeline id。"
+
+  defp format_new_pipeline_reason(:invalid_pipeline_id),
+    do: "pipeline id 只能包含小写字母、数字、`-` 和 `_`，并且必须以字母或数字开头。"
+
+  defp format_new_pipeline_reason(:missing_pipeline_project_slug),
+    do: "请输入 project slug。"
+
+  defp format_new_pipeline_reason(:missing_pipeline_prompt_template),
+    do: "请输入 prompt template。"
+
+  defp format_new_pipeline_reason({:pipeline_already_exists, pipeline_id}),
+    do: "pipeline `#{pipeline_id}` 已存在，请换一个 id。"
+
+  defp format_new_pipeline_reason(other),
+    do: "无法创建新的 pipeline: #{inspect(other)}"
 
   defp schedule_runtime_tick do
     Process.send_after(self(), :runtime_tick, @runtime_tick_ms)

@@ -1108,6 +1108,83 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert String.trim_trailing(File.read!(alpha.workflow_path)) == "Alpha prompt template"
   end
 
+  test "config panel scaffolds a new pipeline from the dashboard" do
+    orchestrator_name = Module.concat(__MODULE__, :PipelineScaffoldWorkflowEditorOrchestrator)
+    snapshot = static_snapshot()
+    pipeline_root = Path.join(System.tmp_dir!(), "symphony-pipeline-scaffold-#{System.unique_integer([:positive])}")
+    original_pipeline_root_path = Application.get_env(:symphony_elixir, :pipeline_root_path)
+
+    on_exit(fn ->
+      if is_binary(original_pipeline_root_path) do
+        Workflow.set_pipeline_root_path(original_pipeline_root_path)
+      else
+        Workflow.clear_pipeline_root_path()
+      end
+
+      File.rm_rf(pipeline_root)
+    end)
+
+    alpha =
+      write_pipeline_fixture!(pipeline_root, "alpha", "alpha-project", "Alpha prompt template")
+
+    beta_pipeline_dir = Path.join(pipeline_root, "beta")
+    beta_pipeline_config_path = Path.join(beta_pipeline_dir, "pipeline.yaml")
+    beta_workflow_path = Path.join(beta_pipeline_dir, "WORKFLOW.md")
+
+    Workflow.set_pipeline_root_path(pipeline_root)
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, view, html} = live(build_conn(), "/panel/config")
+
+    assert html =~ "+ New Pipeline"
+    refute html =~ "Create Pipeline"
+
+    opened_html =
+      view
+      |> element("#open-new-pipeline")
+      |> render_click()
+
+    assert opened_html =~ "Create Pipeline"
+    assert opened_html =~ "先创建最小可运行配置，后续再补高级项。"
+
+    created_html =
+      view
+      |> form("#pipeline-create-form",
+        new_pipeline: %{
+          "id" => "beta",
+          "tracker_project_slug" => "beta-project",
+          "prompt_template" => "Beta prompt template",
+          "enabled" => "true"
+        }
+      )
+      |> render_submit()
+
+    assert created_html =~ "已创建并装载新的 pipeline。"
+    assert created_html =~ beta_pipeline_config_path
+    assert created_html =~ beta_workflow_path
+    assert created_html =~ "beta-project"
+
+    assert {:ok, beta_config} =
+             beta_pipeline_config_path
+             |> File.read!()
+             |> YamlElixir.read_from_string()
+
+    assert beta_config["id"] == "beta"
+    assert beta_config["enabled"] == true
+    assert get_in(beta_config, ["tracker", "project_slug"]) == "beta-project"
+    assert String.trim_trailing(File.read!(beta_workflow_path)) == "Beta prompt template"
+
+    assert {:ok, alpha_config} =
+             alpha.pipeline_config_path
+             |> File.read!()
+             |> YamlElixir.read_from_string()
+
+    assert alpha_config["id"] == "alpha"
+    assert get_in(alpha_config, ["tracker", "project_slug"]) == "alpha-project"
+  end
+
   test "config panel exposes save confirmation metadata and keyboard shortcut hook" do
     orchestrator_name = Module.concat(__MODULE__, :WorkflowEditorHooksOrchestrator)
     snapshot = static_snapshot()

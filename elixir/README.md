@@ -232,7 +232,8 @@ separately while still showing aggregate host totals.
 The config panel at `/panel/config` also switches into pipeline mode automatically when `pipelines/`
 is present: you can flip between managed pipelines, edit the merged draft in one place, and Symphony
 will write structured settings back to `pipeline.yaml` while keeping the prompt body in that
-pipeline's `WORKFLOW.md`.
+pipeline's `WORKFLOW.md`. The same panel now includes a lightweight `+ New Pipeline` scaffold flow
+for creating the minimal files for a new managed project.
 
 ## Project Layout
 
