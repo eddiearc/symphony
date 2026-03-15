@@ -289,19 +289,24 @@ defmodule SymphonyElixir.CLITest do
     assert message =~ "No enabled pipelines found under"
   end
 
-  test "returns startup error when pipeline root has multiple enabled pipelines" do
+  test "starts from a pipeline root with multiple enabled pipelines" do
     pipelines_root = Path.expand("pipelines")
+    workflow_path_a = Path.join(pipelines_root, "project-a/WORKFLOW.md")
+    workflow_path_b = Path.join(pipelines_root, "project-b/WORKFLOW.md")
 
     deps = %{
       file_regular?: fn _path -> false end,
       dir_exists?: fn path -> path == pipelines_root end,
-      set_workflow_file_path: fn _path -> :ok end,
+      set_workflow_file_path: fn path ->
+        send(self(), {:workflow_set, path})
+        :ok
+      end,
       set_pipeline_root_path: fn _path -> :ok end,
       load_pipelines: fn _path ->
         {:ok,
          [
-           %Pipeline{id: "project-a", enabled: true},
-           %Pipeline{id: "project-b", enabled: true}
+           %Pipeline{id: "project-b", enabled: true, workflow_path: workflow_path_b},
+           %Pipeline{id: "project-a", enabled: true, workflow_path: workflow_path_a}
          ]}
       end,
       validate_pipeline: fn _pipeline ->
@@ -313,10 +318,9 @@ defmodule SymphonyElixir.CLITest do
       ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
     }
 
-    assert {:error, message} = CLI.evaluate([@ack_flag], deps)
-    assert message =~ "Exactly one enabled pipeline is required"
-    assert message =~ "project-a"
-    assert message =~ "project-b"
-    refute_received :pipeline_validated
+    assert :ok = CLI.evaluate([@ack_flag], deps)
+    assert_received :pipeline_validated
+    assert_received :pipeline_validated
+    assert_received {:workflow_set, ^workflow_path_a}
   end
 end

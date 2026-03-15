@@ -104,9 +104,9 @@ defmodule SymphonyElixir.CLI do
   @spec run_pipeline_root(String.t(), deps()) :: :ok | {:error, String.t()}
   defp run_pipeline_root(pipeline_root_path, deps) do
     with {:ok, pipelines} <- load_pipelines(deps, pipeline_root_path),
-         {:ok, enabled_pipeline} <- select_enabled_pipeline(pipelines),
-         :ok <- validate_enabled_pipeline(enabled_pipeline, deps),
-         {:ok, compatibility_workflow_path} <- compatibility_workflow_path(enabled_pipeline) do
+         {:ok, enabled_pipelines} <- enabled_pipelines(pipelines),
+         :ok <- validate_enabled_pipelines(enabled_pipelines, deps),
+         {:ok, compatibility_workflow_path} <- compatibility_workflow_path(enabled_pipelines) do
       :ok = set_pipeline_root_path(deps, pipeline_root_path)
       :ok = deps.set_workflow_file_path.(compatibility_workflow_path)
       start_runtime({:pipelines, pipeline_root_path}, deps)
@@ -116,9 +116,6 @@ defmodule SymphonyElixir.CLI do
 
       {:error, :no_enabled_pipelines} ->
         {:error, "No enabled pipelines found under #{pipeline_root_path}"}
-
-      {:error, {:multiple_enabled_pipelines, pipeline_ids}} ->
-        {:error, "Exactly one enabled pipeline is required under #{pipeline_root_path}; found: #{Enum.join(pipeline_ids, ", ")}"}
 
       {:error, reason} ->
         {:error, "Failed to load pipelines from #{pipeline_root_path}: #{inspect(reason)}"}
@@ -146,21 +143,17 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  @spec select_enabled_pipeline([SymphonyElixir.Pipeline.t()]) ::
-          {:ok, SymphonyElixir.Pipeline.t()}
-          | {:error, :no_enabled_pipelines | {:multiple_enabled_pipelines, [String.t()]}}
-  defp select_enabled_pipeline(pipelines) when is_list(pipelines) do
+  @spec enabled_pipelines([SymphonyElixir.Pipeline.t()]) ::
+          {:ok, [SymphonyElixir.Pipeline.t(), ...]} | {:error, :no_enabled_pipelines}
+  defp enabled_pipelines(pipelines) when is_list(pipelines) do
     enabled_pipelines = Enum.filter(pipelines, & &1.enabled)
 
     case enabled_pipelines do
       [] ->
         {:error, :no_enabled_pipelines}
 
-      [pipeline] ->
-        {:ok, pipeline}
-
       pipelines ->
-        {:error, {:multiple_enabled_pipelines, Enum.map(pipelines, & &1.id)}}
+        {:ok, pipelines}
     end
   end
 
@@ -173,10 +166,24 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  @spec compatibility_workflow_path(SymphonyElixir.Pipeline.t()) ::
+  @spec validate_enabled_pipelines([SymphonyElixir.Pipeline.t()], deps()) ::
+          :ok | {:error, {:invalid_enabled_pipeline, String.t(), term()}}
+  defp validate_enabled_pipelines(pipelines, deps) when is_list(pipelines) do
+    Enum.reduce_while(pipelines, :ok, fn pipeline, :ok ->
+      case validate_enabled_pipeline(pipeline, deps) do
+        :ok -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  @spec compatibility_workflow_path([SymphonyElixir.Pipeline.t()]) ::
           {:ok, String.t()} | {:error, :missing_compatibility_workflow}
-  defp compatibility_workflow_path(pipeline) do
-    case pipeline do
+  defp compatibility_workflow_path(pipelines) when is_list(pipelines) do
+    pipelines
+    |> Enum.sort_by(& &1.id)
+    |> List.first()
+    |> case do
       %{workflow_path: workflow_path} when is_binary(workflow_path) and workflow_path != "" ->
         {:ok, workflow_path}
 
