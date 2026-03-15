@@ -1,7 +1,7 @@
 .PHONY: help all setup deps build run fmt fmt-check lint test coverage ci dialyzer e2e
 
 MIX ?= mix
-WORKFLOW ?= ./WORKFLOW.md
+PIPELINE_ROOT ?= ./pipelines
 PORT ?= 4000
 SYMPHONY_ACK_FLAG ?= --i-understand-that-this-will-be-running-without-the-usual-guardrails
 
@@ -18,7 +18,7 @@ build:
 	$(MIX) build
 
 run: build
-	./bin/symphony $(SYMPHONY_ACK_FLAG) --port $(PORT) $(WORKFLOW)
+	./bin/symphony $(SYMPHONY_ACK_FLAG) --port $(PORT) $(PIPELINE_ROOT)
 
 fmt:
 	$(MIX) format

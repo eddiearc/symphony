@@ -3,14 +3,17 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from Linear issue data.
   """
 
-  alias SymphonyElixir.{Config, Workflow}
+  alias SymphonyElixir.Config
 
   @render_opts [strict_variables: true, strict_filters: true]
 
   @spec build_prompt(SymphonyElixir.Linear.Issue.t(), keyword()) :: String.t()
   def build_prompt(issue, opts \\ []) do
     template =
-      Workflow.current()
+      case Config.current_pipeline() do
+        {:ok, pipeline} -> pipeline
+        {:error, reason} -> {:error, reason}
+      end
       |> prompt_template!()
       |> parse_template!()
 
@@ -27,7 +30,6 @@ defmodule SymphonyElixir.PromptBuilder do
     render_prompt(template, issue, opts)
   end
 
-  defp prompt_template!({:ok, %{prompt_template: prompt}}), do: default_prompt(prompt)
   defp prompt_template!(%{prompt_template: prompt}), do: pipeline_prompt(prompt)
 
   defp prompt_template!({:error, reason}) do

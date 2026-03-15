@@ -716,19 +716,8 @@ defmodule SymphonyElixir.StatusDashboard do
   end
 
   defp configured_dashboard_pipelines(pipeline_root_path) when is_binary(pipeline_root_path) do
-    if File.dir?(pipeline_root_path) do
-      case PipelineLoader.load_pipeline_root(pipeline_root_path) do
-        {:ok, pipelines} -> pipelines
-        {:error, _reason} -> compatibility_dashboard_pipelines()
-      end
-    else
-      compatibility_dashboard_pipelines()
-    end
-  end
-
-  defp compatibility_dashboard_pipelines do
-    case Config.current_pipeline() do
-      {:ok, pipeline} -> [pipeline]
+    case PipelineLoader.load_pipeline_root(pipeline_root_path) do
+      {:ok, pipelines} -> pipelines
       {:error, _reason} -> []
     end
   end

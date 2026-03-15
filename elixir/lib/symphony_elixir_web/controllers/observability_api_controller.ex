@@ -6,7 +6,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.{Config, Pipeline, PipelineLoader, PipelineSupervisor, Workflow}
+  alias SymphonyElixir.{Pipeline, PipelineLoader, PipelineSupervisor, Workflow}
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
   @spec state(Conn.t(), map()) :: Conn.t()
@@ -180,21 +180,8 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   end
 
   defp configured_pipelines do
-    pipeline_root_path = Workflow.pipeline_root_path()
-
-    if File.dir?(pipeline_root_path) do
-      case PipelineLoader.load_pipeline_root(pipeline_root_path) do
-        {:ok, pipelines} -> pipelines
-        {:error, _reason} -> compatibility_pipeline()
-      end
-    else
-      compatibility_pipeline()
-    end
-  end
-
-  defp compatibility_pipeline do
-    case Config.current_pipeline() do
-      {:ok, pipeline} -> [pipeline]
+    case PipelineLoader.load_pipeline_root(Workflow.pipeline_root_path()) do
+      {:ok, pipelines} -> pipelines
       {:error, _reason} -> []
     end
   end

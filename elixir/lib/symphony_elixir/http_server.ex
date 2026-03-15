@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.HttpServer do
   @moduledoc """
-  Compatibility facade that starts the Phoenix observability endpoint when enabled.
+  Starts the Phoenix observability endpoint when enabled.
   """
 
   alias SymphonyElixir.{Config, Orchestrator, PipelineLoader, Workflow}
@@ -90,21 +90,8 @@ defmodule SymphonyElixir.HttpServer do
   defp normalize_host(host), do: to_string(host)
 
   defp load_pipelines do
-    pipeline_root_path = Workflow.pipeline_root_path()
-
-    if File.dir?(pipeline_root_path) do
-      case PipelineLoader.load_pipeline_root(pipeline_root_path) do
-        {:ok, pipelines} -> pipelines
-        {:error, _reason} -> compatibility_pipelines()
-      end
-    else
-      compatibility_pipelines()
-    end
-  end
-
-  defp compatibility_pipelines do
-    case Config.current_pipeline() do
-      {:ok, pipeline} -> [pipeline]
+    case PipelineLoader.load_pipeline_root(Workflow.pipeline_root_path()) do
+      {:ok, pipelines} -> pipelines
       {:error, _reason} -> []
     end
   end

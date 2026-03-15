@@ -20,7 +20,8 @@ moving from managing coding agents to managing work that needs to get done.
 
 The current Elixir reference implementation can act as a lightweight multi-pipeline host: one
 Symphony process can supervise multiple Linear projects/repositories at once, with isolated
-workspaces and prompts per pipeline.
+workspaces and prompts per pipeline. The runtime is pipeline-only: it starts from a `pipelines/`
+directory, with one `pipeline.yaml` + `WORKFLOW.md` pair per managed project.
 
 ### Option 1. Make your own
 

@@ -66,25 +66,23 @@ mise exec -- make run
 
 `make run` rebuilds `bin/symphony` before launch and starts the dashboard on
 `http://127.0.0.1:4000/` by default so the running service matches the current source tree.
-Override the pipeline root or dashboard port as needed:
+By default it starts from `./pipelines`. Override the pipeline root or dashboard port as needed:
 
 ```bash
-mise exec -- make run WORKFLOW=/path/to/pipelines
-mise exec -- make run PORT=4100 WORKFLOW=/path/to/custom/WORKFLOW.md
+mise exec -- make run
+mise exec -- make run PIPELINE_ROOT=/path/to/pipelines
+mise exec -- make run PORT=4100 PIPELINE_ROOT=/path/to/pipelines
 ```
 
 ## Configuration
 
-Pass either a pipeline root directory or a legacy workflow file to `./bin/symphony`:
+Pass a pipeline root directory to `./bin/symphony`:
 
 ```bash
 ./bin/symphony /path/to/pipelines
-./bin/symphony /path/to/custom/WORKFLOW.md
 ```
 
-If no path is passed, Symphony resolves startup target in this order:
-1. `./pipelines` if the directory exists
-2. `./WORKFLOW.md` (legacy compatibility mode)
+If no path is passed, Symphony starts from `./pipelines`.
 
 Optional flags:
 
@@ -135,38 +133,6 @@ pipelines/
 The scaffolded `pipeline.yaml` includes the tracker target, workspace root, Codex command, and an
 `after_create` clone hook when `--repo` is provided.
 
-### Legacy compatibility mode: single `WORKFLOW.md`
-
-Legacy mode is still supported for incremental migration. In this mode, Symphony treats the file as
-a synthetic default pipeline (`id: default`).
-
-The legacy `WORKFLOW.md` format uses YAML front matter for configuration, plus a Markdown body used
-as the Codex session prompt.
-
-Minimal example:
-
-```md
----
-tracker:
-  kind: linear
-  project_slug: "..."
-workspace:
-  root: ~/code/workspaces
-hooks:
-  after_create: |
-    git clone git@github.com:your-org/your-repo.git .
-agent:
-  max_concurrent_agents: 10
-  max_turns: 20
-codex:
-  command: codex app-server
----
-
-You are working on a Linear issue {{ issue.identifier }}.
-
-Title: {{ issue.title }} Body: {{ issue.description }}
-```
-
 Notes:
 
 - If a value is missing, defaults are used.
@@ -205,11 +171,8 @@ codex:
   command: "$CODEX_BIN app-server --model gpt-5.3-codex"
 ```
 
-- If the selected pipeline root/workflow source is missing or invalid at startup, Symphony does not boot.
-- If a later reload fails, Symphony keeps running with the last known good workflow and logs the
-  reload error until the file is fixed.
+- If the selected pipeline root is missing or invalid at startup, Symphony does not boot.
 - `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API.
-- Legacy single-pipeline endpoints remain available at `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
 - Multi-pipeline control endpoints are available at:
   - `/api/v1/pipelines`
   - `/api/v1/pipelines/:id`
@@ -226,11 +189,11 @@ The observability UI now runs on a minimal Phoenix stack:
 - Bandit as the HTTP server
 - Phoenix dependency static assets for the LiveView client bootstrap
 
-In multi-pipeline mode, both the terminal dashboard and LiveView summarize each pipeline's status
+Both the terminal dashboard and LiveView summarize each pipeline's status
 separately while still showing aggregate host totals.
 
-The config panel at `/panel/config` also switches into pipeline mode automatically when `pipelines/`
-is present: you can flip between managed pipelines, edit the merged draft in one place, and Symphony
+The config panel at `/panel/config` is pipeline-only: you can flip between managed pipelines, edit
+the merged draft in one place, and Symphony
 will write structured settings back to `pipeline.yaml` while keeping the prompt body in that
 pipeline's `WORKFLOW.md`. The same panel now includes a lightweight `+ New Pipeline` scaffold flow
 for creating the minimal files for a new managed project.
@@ -239,7 +202,7 @@ for creating the minimal files for a new managed project.
 
 - `lib/`: application code and Mix tasks
 - `test/`: ExUnit coverage for runtime behavior
-- `WORKFLOW.md`: in-repo workflow contract used by local runs
+- `WORKFLOW.md`: default scaffold template used for new pipelines
 - `../.codex/`: repository-local Codex skills and setup helpers
 
 ## Testing
@@ -262,7 +225,7 @@ Optional environment variables:
 - `SYMPHONY_LIVE_LINEAR_TEAM_KEY` defaults to `SYME2E`
 - `SYMPHONY_LIVE_CODEX_COMMAND` defaults to `codex app-server`
 
-The live test creates a temporary Linear project and issue, writes a temporary `WORKFLOW.md`,
+The live test creates a temporary Linear project and issue, writes a temporary pipeline directory,
 runs a real agent turn, verifies the workspace side effect, requires Codex to comment on and close
 the Linear issue, then marks the project completed so the run remains visible in Linear.
 `make e2e` fails fast with a clear error if `LINEAR_API_KEY` is unset.

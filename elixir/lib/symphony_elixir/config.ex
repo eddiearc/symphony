@@ -1,10 +1,10 @@
 defmodule SymphonyElixir.Config do
   @moduledoc """
-  Runtime configuration loaded from `WORKFLOW.md`.
+  Runtime configuration loaded from the primary enabled pipeline.
   """
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{Pipeline, PipelineStore, Workflow}
+  alias SymphonyElixir.{Pipeline, PipelineLoader}
 
   @default_prompt_template """
   You are working on a Linear issue.
@@ -30,12 +30,18 @@ defmodule SymphonyElixir.Config do
 
   @spec settings() :: {:ok, Schema.t()} | {:error, term()}
   def settings do
-    case Workflow.current() do
-      {:ok, %{config: config}} when is_map(config) ->
-        Schema.parse(config)
-
-      {:error, reason} ->
-        {:error, reason}
+    with {:ok, pipeline} <- current_pipeline() do
+      {:ok,
+       %Schema{
+         tracker: pipeline.tracker,
+         polling: pipeline.polling,
+         workspace: pipeline.workspace,
+         agent: pipeline.agent,
+         codex: pipeline.codex,
+         hooks: pipeline.hooks,
+         observability: pipeline.observability,
+         server: pipeline.server
+       }}
     end
   end
 
@@ -76,7 +82,7 @@ defmodule SymphonyElixir.Config do
 
   @spec workflow_prompt() :: String.t()
   def workflow_prompt do
-    case Workflow.current() do
+    case current_pipeline() do
       {:ok, %{prompt_template: prompt}} ->
         if String.trim(prompt) == "", do: @default_prompt_template, else: prompt
 
@@ -103,12 +109,18 @@ defmodule SymphonyElixir.Config do
 
   @spec current_pipeline() :: {:ok, Pipeline.t()} | {:error, term()}
   def current_pipeline do
-    case PipelineStore.current() do
-      {:error, {:invalid_pipeline_config, message}} ->
-        {:error, {:invalid_workflow_config, message}}
+    case PipelineLoader.load_pipeline_root(SymphonyElixir.Workflow.pipeline_root_path()) do
+      {:ok, pipelines} ->
+        case Enum.find(pipelines, & &1.enabled) do
+          %Pipeline{} = pipeline -> {:ok, pipeline}
+          nil -> {:error, :no_enabled_pipelines}
+        end
 
-      other ->
-        other
+      {:error, {:invalid_pipeline_entry, _path, {:invalid_pipeline_config, message}}} ->
+        {:error, {:invalid_pipeline_config, message}}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -162,20 +174,23 @@ defmodule SymphonyElixir.Config do
 
   defp format_config_error(reason) do
     case reason do
-      {:invalid_workflow_config, message} ->
-        "Invalid WORKFLOW.md config: #{message}"
-
-      {:missing_workflow_file, path, raw_reason} ->
-        "Missing WORKFLOW.md at #{path}: #{inspect(raw_reason)}"
+      {:invalid_pipeline_config, message} ->
+        "Invalid pipeline config: #{message}"
 
       {:workflow_parse_error, raw_reason} ->
-        "Failed to parse WORKFLOW.md: #{inspect(raw_reason)}"
+        "Failed to parse pipeline workflow: #{inspect(raw_reason)}"
 
       :workflow_front_matter_not_a_map ->
-        "Failed to parse WORKFLOW.md: workflow front matter must decode to a map"
+        "Failed to parse pipeline workflow: workflow front matter must decode to a map"
+
+      :no_enabled_pipelines ->
+        "No enabled pipelines found"
+
+      {:invalid_pipeline_root, path, raw_reason} ->
+        "Invalid pipeline root at #{path}: #{inspect(raw_reason)}"
 
       other ->
-        "Invalid WORKFLOW.md config: #{inspect(other)}"
+        "Invalid pipeline config: #{inspect(other)}"
     end
   end
 end

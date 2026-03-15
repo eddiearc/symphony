@@ -227,37 +227,33 @@ defmodule SymphonyElixir.Orchestrator do
       choose_issues(issues, state)
     else
       {:error, :missing_linear_api_token} ->
-        Logger.error("Linear API token missing in WORKFLOW.md")
+        Logger.error("Linear API token missing in pipeline config")
         state
 
       {:error, :missing_linear_project_slug} ->
-        Logger.error("Linear project slug missing in WORKFLOW.md")
+        Logger.error("Linear project slug missing in pipeline config")
         state
 
       {:error, :missing_tracker_kind} ->
-        Logger.error("Tracker kind missing in WORKFLOW.md")
+        Logger.error("Tracker kind missing in pipeline config")
 
         state
 
       {:error, {:unsupported_tracker_kind, kind}} ->
-        Logger.error("Unsupported tracker kind in WORKFLOW.md: #{inspect(kind)}")
+        Logger.error("Unsupported tracker kind in pipeline config: #{inspect(kind)}")
 
         state
 
-      {:error, {:invalid_workflow_config, message}} ->
-        Logger.error("Invalid WORKFLOW.md config: #{message}")
-        state
-
-      {:error, {:missing_workflow_file, path, reason}} ->
-        Logger.error("Missing WORKFLOW.md at #{path}: #{inspect(reason)}")
+      {:error, {:invalid_pipeline_config, message}} ->
+        Logger.error("Invalid pipeline config: #{message}")
         state
 
       {:error, :workflow_front_matter_not_a_map} ->
-        Logger.error("Failed to parse WORKFLOW.md: workflow front matter must decode to a map")
+        Logger.error("Failed to parse pipeline workflow: workflow front matter must decode to a map")
         state
 
       {:error, {:workflow_parse_error, reason}} ->
-        Logger.error("Failed to parse WORKFLOW.md: #{inspect(reason)}")
+        Logger.error("Failed to parse pipeline workflow: #{inspect(reason)}")
         state
 
       {:error, reason} ->

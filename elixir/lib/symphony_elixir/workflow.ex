@@ -1,9 +1,7 @@
 defmodule SymphonyElixir.Workflow do
   @moduledoc """
-  Loads workflow configuration and prompt from WORKFLOW.md.
+  Helpers for reading and rendering pipeline workflow files.
   """
-
-  alias SymphonyElixir.WorkflowStore
 
   @workflow_file_name "WORKFLOW.md"
   @pipelines_dir_name "pipelines"
@@ -21,7 +19,7 @@ defmodule SymphonyElixir.Workflow do
   @spec workflow_file_path() :: Path.t()
   def workflow_file_path do
     Application.get_env(:symphony_elixir, :workflow_file_path) ||
-      Path.join(File.cwd!(), @workflow_file_name)
+      Path.join([pipeline_root_path(), "default", @workflow_file_name])
   end
 
   @spec pipeline_root_path() :: Path.t()
@@ -33,28 +31,24 @@ defmodule SymphonyElixir.Workflow do
   @spec set_workflow_file_path(Path.t()) :: :ok
   def set_workflow_file_path(path) when is_binary(path) do
     Application.put_env(:symphony_elixir, :workflow_file_path, path)
-    maybe_reload_store()
     :ok
   end
 
   @spec set_pipeline_root_path(Path.t()) :: :ok
   def set_pipeline_root_path(path) when is_binary(path) do
     Application.put_env(:symphony_elixir, :pipeline_root_path, path)
-    maybe_reload_store()
     :ok
   end
 
   @spec clear_workflow_file_path() :: :ok
   def clear_workflow_file_path do
     Application.delete_env(:symphony_elixir, :workflow_file_path)
-    maybe_reload_store()
     :ok
   end
 
   @spec clear_pipeline_root_path() :: :ok
   def clear_pipeline_root_path do
     Application.delete_env(:symphony_elixir, :pipeline_root_path)
-    maybe_reload_store()
     :ok
   end
 
@@ -66,13 +60,7 @@ defmodule SymphonyElixir.Workflow do
 
   @spec current() :: {:ok, loaded_workflow()} | {:error, term()}
   def current do
-    case Process.whereis(WorkflowStore) do
-      pid when is_pid(pid) ->
-        WorkflowStore.current()
-
-      _ ->
-        load()
-    end
+    load()
   end
 
   @spec load() :: {:ok, loaded_workflow()} | {:error, term()}
@@ -103,9 +91,9 @@ defmodule SymphonyElixir.Workflow do
 
   @spec save(String.t()) :: :ok | {:error, term()}
   def save(content) when is_binary(content) do
-    with :ok <- validate_content(content),
-         :ok <- File.write(workflow_file_path(), content) do
-      maybe_reload_store()
+    case validate_content(content) do
+      :ok -> File.write(workflow_file_path(), content)
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -209,14 +197,6 @@ defmodule SymphonyElixir.Workflow do
         {:error, reason} -> {:error, reason}
       end
     end
-  end
-
-  defp maybe_reload_store do
-    if Process.whereis(WorkflowStore) do
-      _ = WorkflowStore.force_reload()
-    end
-
-    :ok
   end
 
   defp normalize_render_keys(value) when is_map(value) do

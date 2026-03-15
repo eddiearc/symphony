@@ -357,7 +357,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
                   <div class="config-command-copy">
                     <p class="section-kicker">config</p>
                     <h2 class="config-studio-title"><%= workflow_editor_title(@workflow_target, @config_pipelines) %></h2>
-                    <span hidden><%= legacy_workflow_editor_title(@workflow_target, @config_pipelines) %></span>
                   </div>
 
                   <div class="config-command-meta">
@@ -376,8 +375,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
                       </span>
                     <% else %>
                       <span class="hero-chip">
-                        <span class="hero-chip-label">mode</span>
-                        <span>legacy</span>
+                        <span class="hero-chip-label">status</span>
+                        <span>unconfigured</span>
                       </span>
                     <% end %>
                     <span class="hero-chip hero-chip-ghost">
@@ -1508,21 +1507,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp configured_pipelines do
-    pipeline_root_path = Workflow.pipeline_root_path()
-
-    if File.dir?(pipeline_root_path) do
-      case PipelineLoader.load_pipeline_root(pipeline_root_path) do
-        {:ok, pipelines} -> pipelines
-        {:error, _reason} -> compatibility_pipelines()
-      end
-    else
-      compatibility_pipelines()
-    end
-  end
-
-  defp compatibility_pipelines do
-    case Config.current_pipeline() do
-      {:ok, pipeline} -> [pipeline]
+    case PipelineLoader.load_pipeline_root(Workflow.pipeline_root_path()) do
+      {:ok, pipelines} -> pipelines
       {:error, _reason} -> []
     end
   end
@@ -1580,16 +1566,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp workflow_editor_catalog do
-    pipeline_root_path = Workflow.pipeline_root_path()
-
-    if File.dir?(pipeline_root_path) do
-      case PipelineLoader.load_pipeline_root(pipeline_root_path) do
-        {:ok, [_ | _] = pipelines} -> {:pipeline, pipelines}
-        _ -> {:legacy, []}
-      end
-    else
-      {:legacy, []}
-    end
+    configured_pipelines()
   end
 
   defp selected_editor_pipeline_id(selected_pipeline_id, pipelines) when is_list(pipelines) do
@@ -1609,7 +1586,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
     Enum.find(pipelines, & &1.enabled) || List.first(pipelines)
   end
 
-  defp workflow_target(:pipeline, pipelines, selected_pipeline_id) when is_list(pipelines) do
+  defp workflow_target(pipelines, selected_pipeline_id) when is_list(pipelines) do
     pipeline =
       Enum.find(pipelines, fn
         %Pipeline{id: pipeline_id} -> pipeline_id == selected_pipeline_id
@@ -1624,30 +1601,21 @@ defmodule SymphonyElixirWeb.DashboardLive do
     }
   end
 
-  defp workflow_target(_editor_mode, _pipelines, _selected_pipeline_id) do
-    %{
-      mode: :legacy,
-      pipeline: nil,
-      pipeline_config_path: nil,
-      workflow_path: Workflow.workflow_file_path()
-    }
-  end
-
   defp assign_workflow_editor(socket, opts \\ []) do
     feedback = Keyword.get(opts, :feedback)
-    {editor_mode, pipelines} = workflow_editor_catalog()
+    pipelines = workflow_editor_catalog()
     pipeline_root_path = Workflow.pipeline_root_path()
 
     selected_pipeline_id =
       selected_editor_pipeline_id(socket.assigns[:selected_pipeline_id], pipelines)
 
-    target = workflow_target(editor_mode, pipelines, selected_pipeline_id)
+    target = workflow_target(pipelines, selected_pipeline_id)
 
     socket =
       socket
       |> assign(:pipeline_root_path, pipeline_root_path)
       |> assign(:pipeline_root_available, File.dir?(pipeline_root_path))
-      |> assign(:config_pipelines, if(editor_mode == :pipeline, do: pipelines, else: []))
+      |> assign(:config_pipelines, pipelines)
       |> assign(:selected_pipeline_id, selected_pipeline_id)
       |> assign(:workflow_target, target)
       |> assign(:workflow_path, target.workflow_path)
@@ -1694,11 +1662,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
     end
   end
 
-  defp load_workflow_editor_content(%{workflow_path: workflow_path}) do
-    with {:ok, content} <- Workflow.raw_content(workflow_path) do
-      {:ok, content, parse_workflow_body(content)}
-    end
-  end
+  defp load_workflow_editor_content(_target), do: {:error, :missing_pipeline_editor_content}
 
   defp pipeline_config_path(%Pipeline{source_path: source_path}) when is_binary(source_path) do
     Path.join(source_path, "pipeline.yaml")
@@ -1710,7 +1674,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
        when is_binary(workflow_path),
        do: workflow_path
 
-  defp workflow_target_path(_pipeline), do: Workflow.workflow_file_path()
+  defp workflow_target_path(_pipeline), do: nil
 
   defp maybe_sync_workflow_form_from_body(socket, body) when is_binary(body) do
     case Workflow.parse_content(body) do
@@ -1738,9 +1702,17 @@ defmodule SymphonyElixirWeb.DashboardLive do
     draft_body = socket.assigns[:workflow_body] || submitted_body
 
     cond do
-      submitted_body != persisted_body -> submitted_body
-      draft_body != persisted_body -> draft_body
-      true -> submitted_body
+      draft_body != persisted_body and submitted_body != draft_body ->
+        draft_body
+
+      submitted_body != persisted_body ->
+        submitted_body
+
+      draft_body != persisted_body ->
+        draft_body
+
+      true ->
+        submitted_body
     end
   end
 
@@ -1756,23 +1728,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
          :ok <- File.write(target.workflow_path, prompt_file_content(prompt_template)) do
       StatusDashboard.notify_update()
       :ok
-    end
-  end
-
-  defp save_workflow_body(_target, body) when is_binary(body) do
-    case Workflow.parse_content(body) do
-      {:ok, %{config: config}} ->
-        with :ok <- validate_editor_tracker_kind(config),
-             :ok <- Workflow.save(body) do
-          StatusDashboard.notify_update()
-          :ok
-        end
-
-      _ ->
-        with :ok <- Workflow.save(body) do
-          StatusDashboard.notify_update()
-          :ok
-        end
     end
   end
 
@@ -2158,27 +2113,13 @@ defmodule SymphonyElixirWeb.DashboardLive do
        ),
        do: pipeline_id
 
-  defp workflow_editor_title(_target, _pipelines), do: "WORKFLOW.md"
+  defp workflow_editor_title(_target, _pipelines), do: "Pipeline Config"
 
   defp workflow_editor_copy(%{mode: :pipeline}) do
     "Edit `pipeline.yaml` and `WORKFLOW.md`."
   end
 
-  defp workflow_editor_copy(_target) do
-    "Edit the workflow file."
-  end
-
-  defp legacy_workflow_editor_title(%{mode: :pipeline}, pipelines)
-       when is_list(pipelines) and length(pipelines) > 1,
-       do: "Pipeline 配置台"
-
-  defp legacy_workflow_editor_title(
-         %{mode: :pipeline, pipeline: %Pipeline{id: pipeline_id}},
-         _pipelines
-       ),
-       do: "#{pipeline_id} 配置台"
-
-  defp legacy_workflow_editor_title(_target, _pipelines), do: "WORKFLOW.md 编辑台"
+  defp workflow_editor_copy(_target), do: "Edit `pipeline.yaml` and `WORKFLOW.md`."
 
   defp pipeline_switcher_copy(%Pipeline{} = pipeline) do
     if is_binary(pipeline.tracker.project_slug) and
@@ -2239,16 +2180,13 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp selected_pipeline_status(payload, %{mode: :pipeline, pipeline: %Pipeline{} = pipeline}),
     do: config_pipeline_status(payload, pipeline)
 
-  defp selected_pipeline_status(_payload, _workflow_target), do: "legacy"
+  defp selected_pipeline_status(_payload, _workflow_target), do: "unconfigured"
 
-  defp save_button_label(%{mode: :pipeline}), do: "保存当前 pipeline"
-  defp save_button_label(_target), do: "保存 WORKFLOW.md"
+  defp save_button_label(_target), do: "保存当前 pipeline"
 
-  defp reload_feedback_message(%{mode: :pipeline}), do: "已从磁盘重新载入当前 pipeline 配置。"
-  defp reload_feedback_message(_target), do: "已从磁盘重新载入 WORKFLOW.md。"
+  defp reload_feedback_message(_target), do: "已从磁盘重新载入当前 pipeline 配置。"
 
-  defp save_feedback_message(%{mode: :pipeline}), do: "已保存并重新加载当前 pipeline 配置。"
-  defp save_feedback_message(_target), do: "已保存并重新加载运行配置。"
+  defp save_feedback_message(_target), do: "已保存并重新加载当前 pipeline 配置。"
 
   defp workflow_change_manifest(loaded_form, workflow_form) do
     manifest_fields = [
@@ -2291,7 +2229,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
           "即将保存 pipeline `#{pipeline_id}`。"
 
         _ ->
-          "即将保存 WORKFLOW.md。"
+          "即将保存当前 pipeline 配置。"
       end
 
     scope =
@@ -2348,8 +2286,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
       "tracker_api_key" => get_in(config, ["tracker", "api_key"]) || "",
       "tracker_endpoint" => get_in(config, ["tracker", "endpoint"]) || "",
       "tracker_active_states" => joined_state_list(get_in(config, ["tracker", "active_states"])),
-      "tracker_terminal_states" =>
-        joined_state_list(get_in(config, ["tracker", "terminal_states"]))
+      "tracker_terminal_states" => joined_state_list(get_in(config, ["tracker", "terminal_states"]))
     }
   end
 
@@ -2357,11 +2294,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
     %{
       "workspace_root" => get_in(config, ["workspace", "root"]) || "",
       "polling_interval_ms" => integer_string(get_in(config, ["polling", "interval_ms"])),
-      "agent_max_concurrent_agents" =>
-        integer_string(get_in(config, ["agent", "max_concurrent_agents"])),
+      "agent_max_concurrent_agents" => integer_string(get_in(config, ["agent", "max_concurrent_agents"])),
       "agent_max_turns" => integer_string(get_in(config, ["agent", "max_turns"])),
-      "agent_max_retry_backoff_ms" =>
-        integer_string(get_in(config, ["agent", "max_retry_backoff_ms"]))
+      "agent_max_retry_backoff_ms" => integer_string(get_in(config, ["agent", "max_retry_backoff_ms"]))
     }
   end
 
@@ -2405,19 +2340,19 @@ defmodule SymphonyElixirWeb.DashboardLive do
     do: "pipeline 草稿解析失败: #{inspect(reason)}"
 
   defp format_workflow_reason({:workflow_parse_error, reason}, _workflow_target),
-    do: "WORKFLOW.md 解析失败: #{inspect(reason)}"
+    do: "pipeline 工作流解析失败: #{inspect(reason)}"
 
   defp format_workflow_reason({:missing_workflow_file, path, reason}, %{mode: :pipeline}),
     do: "找不到 pipeline 的 WORKFLOW.md: #{path} (#{inspect(reason)})"
 
   defp format_workflow_reason({:missing_workflow_file, path, reason}, _workflow_target),
-    do: "找不到 WORKFLOW.md: #{path} (#{inspect(reason)})"
+    do: "找不到 pipeline 的 WORKFLOW.md: #{path} (#{inspect(reason)})"
 
   defp format_workflow_reason(:workflow_front_matter_not_a_map, %{mode: :pipeline}),
     do: "合成草稿的 front matter 必须是 YAML map。"
 
   defp format_workflow_reason(:workflow_front_matter_not_a_map, _workflow_target),
-    do: "front matter 必须是 YAML map。"
+    do: "pipeline front matter 必须是 YAML map。"
 
   defp format_workflow_reason(:missing_pipeline_editor_content, %{mode: :pipeline}),
     do: "未能读取当前 pipeline 的磁盘配置。"
@@ -2426,7 +2361,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
     do: "无法保存当前 pipeline 配置: #{inspect(other)}"
 
   defp format_workflow_reason(other, _workflow_target),
-    do: "无法保存 WORKFLOW.md: #{inspect(other)}"
+    do: "无法保存当前 pipeline 配置: #{inspect(other)}"
 
   defp format_new_pipeline_reason(:pipeline_root_unavailable),
     do: "当前没有可写的 pipeline 根目录；请先用 pipeline 根目录启动 Symphony。"

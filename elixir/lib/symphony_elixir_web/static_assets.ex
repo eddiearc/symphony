@@ -23,13 +23,11 @@ defmodule SymphonyElixirWeb.StaticAssets do
     "/dashboard.css" => {"text/css", @dashboard_css},
     "/vendor/phoenix_html/phoenix_html.js" => {"application/javascript", @phoenix_html_js},
     "/vendor/phoenix/phoenix.js" => {"application/javascript", @phoenix_js},
-    "/vendor/phoenix_live_view/phoenix_live_view.js" =>
-      {"application/javascript", @phoenix_live_view_js}
+    "/vendor/phoenix_live_view/phoenix_live_view.js" => {"application/javascript", @phoenix_live_view_js}
   }
 
   @versions Map.new(@assets, fn {path, {_content_type, body}} ->
-              {path,
-               :crypto.hash(:sha256, body) |> Base.encode16(case: :lower) |> binary_part(0, 12)}
+              {path, :crypto.hash(:sha256, body) |> Base.encode16(case: :lower) |> binary_part(0, 12)}
             end)
 
   @spec fetch(String.t()) :: {:ok, String.t(), binary()} | :error

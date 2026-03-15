@@ -858,23 +858,23 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
            }
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: ",")
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert {:error, {:invalid_pipeline_config, message}} = Config.validate!()
     assert message =~ "tracker.active_states"
 
     write_workflow_file!(Workflow.workflow_file_path(), max_concurrent_agents: "bad")
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert {:error, {:invalid_pipeline_config, message}} = Config.validate!()
     assert message =~ "agent.max_concurrent_agents"
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_turn_timeout_ms: "bad")
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert {:error, {:invalid_pipeline_config, message}} = Config.validate!()
     assert message =~ "codex.turn_timeout_ms"
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_read_timeout_ms: "bad")
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert {:error, {:invalid_pipeline_config, message}} = Config.validate!()
     assert message =~ "codex.read_timeout_ms"
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_stall_timeout_ms: "bad")
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert {:error, {:invalid_pipeline_config, message}} = Config.validate!()
     assert message =~ "codex.stall_timeout_ms"
 
     write_workflow_file!(Workflow.workflow_file_path(),
@@ -892,7 +892,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       server_host: 123
     )
 
-    assert {:error, {:invalid_workflow_config, _message}} = Config.validate!()
+    assert {:error, {:invalid_pipeline_config, _message}} = Config.validate!()
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_approval_policy: "")
     assert :ok = Config.validate!()
@@ -903,7 +903,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Config.settings!().codex.thread_sandbox == ""
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_turn_sandbox_policy: "bad")
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert {:error, {:invalid_pipeline_config, message}} = Config.validate!()
     assert message =~ "codex.turn_sandbox_policy"
 
     write_workflow_file!(Workflow.workflow_file_path(),

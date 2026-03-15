@@ -5,7 +5,7 @@ defmodule SymphonyElixir.PipelineSupervisor do
 
   use Supervisor
 
-  alias SymphonyElixir.{Config, Orchestrator, Pipeline, PipelineLoader, Workflow}
+  alias SymphonyElixir.{Orchestrator, Pipeline, PipelineLoader, Workflow}
 
   @default_registry SymphonyElixir.PipelineRegistry
 
@@ -87,23 +87,9 @@ defmodule SymphonyElixir.PipelineSupervisor do
   defp load_pipelines! do
     pipeline_root_path = Workflow.pipeline_root_path()
 
-    if File.dir?(pipeline_root_path) do
-      case PipelineLoader.load_pipeline_root(pipeline_root_path) do
-        {:ok, pipelines} -> pipelines
-        {:error, _reason} -> [current_pipeline!()]
-      end
-    else
-      [current_pipeline!()]
-    end
-  end
-
-  defp current_pipeline! do
-    case Config.current_pipeline() do
-      {:ok, pipeline} ->
-        pipeline
-
-      {:error, reason} ->
-        raise ArgumentError, "unable to load current pipeline: #{inspect(reason)}"
+    case PipelineLoader.load_pipeline_root(pipeline_root_path) do
+      {:ok, pipelines} -> pipelines
+      {:error, reason} -> raise ArgumentError, "unable to load pipelines: #{inspect(reason)}"
     end
   end
 
