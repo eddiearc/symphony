@@ -229,6 +229,11 @@ The observability UI now runs on a minimal Phoenix stack:
 In multi-pipeline mode, both the terminal dashboard and LiveView summarize each pipeline's status
 separately while still showing aggregate host totals.
 
+The config panel at `/panel/config` also switches into pipeline mode automatically when `pipelines/`
+is present: you can flip between managed pipelines, edit the merged draft in one place, and Symphony
+will write structured settings back to `pipeline.yaml` while keeping the prompt body in that
+pipeline's `WORKFLOW.md`.
+
 ## Project Layout
 
 - `lib/`: application code and Mix tasks

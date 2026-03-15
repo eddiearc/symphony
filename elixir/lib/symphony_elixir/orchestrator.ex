@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, Pipeline, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, Pipeline, PipelineLoader, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Linear.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -1005,7 +1005,13 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp refresh_pipeline(%State{pipeline: %Pipeline{} = pipeline}), do: pipeline
+  defp refresh_pipeline(%State{pipeline: %Pipeline{} = pipeline}) do
+    case PipelineLoader.reload_pipeline(pipeline) do
+      {:ok, refreshed_pipeline} -> refreshed_pipeline
+      {:error, _reason} -> pipeline
+    end
+  end
+
   defp refresh_pipeline(_state), do: nil
 
   defp tracker_terminal_states(%Pipeline{tracker: tracker}), do: tracker.terminal_states

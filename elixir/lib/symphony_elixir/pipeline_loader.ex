@@ -52,6 +52,17 @@ defmodule SymphonyElixir.PipelineLoader do
     end
   end
 
+  @spec load_pipeline_dir(Path.t()) :: {:ok, Pipeline.t()} | {:error, load_error()}
+  def load_pipeline_dir(pipeline_dir) when is_binary(pipeline_dir) do
+    expanded_dir = Path.expand(pipeline_dir)
+
+    if File.dir?(expanded_dir) do
+      load_pipeline_entry(expanded_dir)
+    else
+      {:error, {:missing_pipeline_path, expanded_dir}}
+    end
+  end
+
   @spec load_legacy_workflow(Path.t()) :: {:ok, [Pipeline.t()]} | {:error, load_error()}
   def load_legacy_workflow(workflow_path) when is_binary(workflow_path) do
     expanded_path = Path.expand(workflow_path)
@@ -65,6 +76,23 @@ defmodule SymphonyElixir.PipelineLoader do
              workflow_path: expanded_path
            ) do
       {:ok, [pipeline]}
+    end
+  end
+
+  @spec reload_pipeline(Pipeline.t()) :: {:ok, Pipeline.t()} | {:error, load_error()}
+  def reload_pipeline(%Pipeline{} = pipeline) do
+    cond do
+      is_binary(pipeline.source_path) and File.dir?(pipeline.source_path) ->
+        load_pipeline_dir(pipeline.source_path)
+
+      is_binary(pipeline.workflow_path) and File.regular?(pipeline.workflow_path) ->
+        with {:ok, [reloaded_pipeline]} <-
+               load_legacy_workflow(pipeline.workflow_path) do
+          {:ok, reloaded_pipeline}
+        end
+
+      true ->
+        {:error, {:missing_pipeline_path, pipeline.source_path || pipeline.workflow_path || pipeline.id}}
     end
   end
 

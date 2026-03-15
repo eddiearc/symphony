@@ -1026,6 +1026,88 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert SymphonyElixir.Config.linear_project_slug() == "updated-project"
   end
 
+  test "config panel switches and saves per-pipeline config under a multi-pipeline root" do
+    orchestrator_name = Module.concat(__MODULE__, :MultiPipelineWorkflowEditorOrchestrator)
+    snapshot = static_snapshot()
+    pipeline_root = Path.join(System.tmp_dir!(), "symphony-pipelines-#{System.unique_integer([:positive])}")
+    original_pipeline_root_path = Application.get_env(:symphony_elixir, :pipeline_root_path)
+
+    on_exit(fn ->
+      if is_binary(original_pipeline_root_path) do
+        Workflow.set_pipeline_root_path(original_pipeline_root_path)
+      else
+        Workflow.clear_pipeline_root_path()
+      end
+
+      File.rm_rf(pipeline_root)
+    end)
+
+    alpha =
+      write_pipeline_fixture!(pipeline_root, "alpha", "alpha-project", "Alpha prompt template")
+
+    beta =
+      write_pipeline_fixture!(pipeline_root, "beta", "beta-project", "Beta prompt template")
+
+    Workflow.set_pipeline_root_path(pipeline_root)
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, view, html} = live(build_conn(), "/panel/config")
+
+    assert html =~ "Pipeline 配置台"
+    assert html =~ "托管管线"
+    assert html =~ alpha.pipeline_config_path
+    assert html =~ alpha.workflow_path
+    assert html =~ "alpha-project"
+    assert html =~ "beta-project"
+
+    switched_html =
+      view
+      |> element("#config-pipeline-beta")
+      |> render_click()
+
+    assert switched_html =~ beta.pipeline_config_path
+    assert switched_html =~ beta.workflow_path
+    assert switched_html =~ "beta-project"
+
+    updated_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "tracker_project_slug" => "beta-updated",
+          "prompt_template" => "Beta prompt updated"
+        }
+      )
+      |> render_change()
+
+    assert updated_html =~ "beta-updated"
+    assert updated_html =~ "Beta prompt updated"
+
+    saved_html =
+      view
+      |> form("#workflow-save-form")
+      |> render_submit()
+
+    assert saved_html =~ "已保存并重新加载当前 pipeline 配置。"
+
+    assert {:ok, beta_config} =
+             beta.pipeline_config_path
+             |> File.read!()
+             |> YamlElixir.read_from_string()
+
+    assert get_in(beta_config, ["tracker", "project_slug"]) == "beta-updated"
+    assert String.trim_trailing(File.read!(beta.workflow_path)) == "Beta prompt updated"
+
+    assert {:ok, alpha_config} =
+             alpha.pipeline_config_path
+             |> File.read!()
+             |> YamlElixir.read_from_string()
+
+    assert get_in(alpha_config, ["tracker", "project_slug"]) == "alpha-project"
+    assert String.trim_trailing(File.read!(alpha.workflow_path)) == "Alpha prompt template"
+  end
+
   test "config panel exposes save confirmation metadata and keyboard shortcut hook" do
     orchestrator_name = Module.concat(__MODULE__, :WorkflowEditorHooksOrchestrator)
     snapshot = static_snapshot()
@@ -1388,6 +1470,81 @@ defmodule SymphonyElixir.ExtensionsTest do
              })
 
     pipeline
+  end
+
+  defp write_pipeline_fixture!(pipeline_root, id, project_slug, prompt_template) do
+    pipeline_dir = Path.join(pipeline_root, id)
+    pipeline_config_path = Path.join(pipeline_dir, "pipeline.yaml")
+    workflow_path = Path.join(pipeline_dir, "WORKFLOW.md")
+
+    config = %{
+      "id" => id,
+      "enabled" => true,
+      "tracker" => %{
+        "kind" => "linear",
+        "api_key" => "token",
+        "endpoint" => "https://api.linear.app/graphql",
+        "project_slug" => project_slug,
+        "active_states" => ["Todo", "In Progress"],
+        "terminal_states" => ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+      },
+      "polling" => %{"interval_ms" => 30_000},
+      "workspace" => %{"root" => Path.join(System.tmp_dir!(), "symphony-workspaces-#{id}")},
+      "agent" => %{
+        "max_concurrent_agents" => 10,
+        "max_turns" => 20,
+        "max_retry_backoff_ms" => 300_000
+      },
+      "codex" => %{
+        "command" => "codex app-server",
+        "approval_policy" => %{
+          "reject" => %{
+            "sandbox_approval" => true,
+            "rules" => true,
+            "mcp_elicitations" => true
+          }
+        },
+        "thread_sandbox" => "workspace-write",
+        "turn_timeout_ms" => 3_600_000,
+        "read_timeout_ms" => 5_000,
+        "stall_timeout_ms" => 300_000
+      },
+      "hooks" => %{"timeout_ms" => 60_000},
+      "observability" => %{
+        "dashboard_enabled" => true,
+        "refresh_ms" => 1_000,
+        "render_interval_ms" => 16
+      },
+      "server" => %{}
+    }
+
+    rendered_body = Workflow.render_content(config, prompt_template)
+
+    File.mkdir_p!(pipeline_dir)
+    File.write!(pipeline_config_path, extract_front_matter_yaml(rendered_body))
+    File.write!(workflow_path, prompt_template <> "\n")
+
+    %{
+      pipeline_dir: pipeline_dir,
+      pipeline_config_path: pipeline_config_path,
+      workflow_path: workflow_path,
+      rendered_body: rendered_body
+    }
+  end
+
+  defp extract_front_matter_yaml(rendered_body) when is_binary(rendered_body) do
+    case String.split(rendered_body, ~r/\R/u, trim: false) do
+      ["---" | rest] ->
+        rest
+        |> Enum.split_while(&(&1 != "---"))
+        |> elem(0)
+        |> Enum.join("\n")
+        |> String.trim_trailing()
+        |> Kernel.<>("\n")
+
+      _ ->
+        ""
+    end
   end
 
   defp maybe_put(map, _key, nil), do: map
