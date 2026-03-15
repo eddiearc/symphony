@@ -10,15 +10,24 @@ defmodule SymphonyElixir.Workspace do
 
   @spec create_for_issue(map() | String.t() | nil) :: {:ok, Path.t()} | {:error, term()}
   def create_for_issue(issue_or_identifier) do
+    create_for_issue(issue_or_identifier, workspace_root(), hooks())
+  end
+
+  @spec create_for_issue(map(), map() | String.t() | nil) :: {:ok, Path.t()} | {:error, term()}
+  def create_for_issue(%{} = pipeline, issue_or_identifier) do
+    create_for_issue(issue_or_identifier, pipeline_workspace_root(pipeline), hooks(pipeline))
+  end
+
+  defp create_for_issue(issue_or_identifier, workspace_root, hooks) do
     issue_context = issue_context(issue_or_identifier)
 
     try do
       safe_id = safe_identifier(issue_context.issue_identifier)
 
-      with {:ok, workspace} <- workspace_path_for_issue(safe_id),
-           :ok <- validate_workspace_path(workspace),
+      with {:ok, workspace} <- workspace_path_for_issue(workspace_root, safe_id),
+           :ok <- validate_workspace_path(workspace, workspace_root),
            {:ok, created?} <- ensure_workspace(workspace),
-           :ok <- maybe_run_after_create_hook(workspace, issue_context, created?) do
+           :ok <- maybe_run_after_create_hook(workspace, issue_context, created?, hooks) do
         {:ok, workspace}
       end
     rescue
@@ -53,9 +62,9 @@ defmodule SymphonyElixir.Workspace do
   def remove(workspace) do
     case File.exists?(workspace) do
       true ->
-        case validate_workspace_path(workspace) do
+        case validate_workspace_path(workspace, workspace_root()) do
           :ok ->
-            maybe_run_before_remove_hook(workspace)
+            maybe_run_before_remove_hook(workspace, hooks())
             File.rm_rf(workspace)
 
           {:error, reason} ->
@@ -71,7 +80,7 @@ defmodule SymphonyElixir.Workspace do
   def remove_issue_workspaces(identifier) when is_binary(identifier) do
     safe_id = safe_identifier(identifier)
 
-    case workspace_path_for_issue(safe_id) do
+    case workspace_path_for_issue(workspace_root(), safe_id) do
       {:ok, workspace} -> remove(workspace)
       {:error, _reason} -> :ok
     end
@@ -83,37 +92,90 @@ defmodule SymphonyElixir.Workspace do
     :ok
   end
 
+  @spec remove_issue_workspaces(map(), term()) :: :ok
+  def remove_issue_workspaces(%{} = pipeline, identifier) when is_binary(identifier) do
+    safe_id = safe_identifier(identifier)
+    workspace_root = pipeline_workspace_root(pipeline)
+
+    case workspace_path_for_issue(workspace_root, safe_id) do
+      {:ok, workspace} ->
+        case File.exists?(workspace) do
+          true ->
+            maybe_run_before_remove_hook(workspace, hooks(pipeline))
+            File.rm_rf(workspace)
+
+          false ->
+            File.rm_rf(workspace)
+        end
+
+      {:error, _reason} ->
+        :ok
+    end
+
+    :ok
+  end
+
   @spec run_before_run_hook(Path.t(), map() | String.t() | nil) :: :ok | {:error, term()}
   def run_before_run_hook(workspace, issue_or_identifier) when is_binary(workspace) do
     issue_context = issue_context(issue_or_identifier)
-    hooks = Config.settings!().hooks
+    hooks = hooks()
 
     case hooks.before_run do
       nil ->
         :ok
 
       command ->
-        run_hook(command, workspace, issue_context, "before_run")
+        run_hook(command, workspace, issue_context, "before_run", hooks.timeout_ms)
+    end
+  end
+
+  @spec run_before_run_hook(map(), Path.t(), map() | String.t() | nil) :: :ok | {:error, term()}
+  def run_before_run_hook(%{} = pipeline, workspace, issue_or_identifier) when is_binary(workspace) do
+    issue_context = issue_context(issue_or_identifier)
+    hooks = hooks(pipeline)
+
+    case hooks.before_run do
+      nil ->
+        :ok
+
+      command ->
+        run_hook(command, workspace, issue_context, "before_run", hooks.timeout_ms)
     end
   end
 
   @spec run_after_run_hook(Path.t(), map() | String.t() | nil) :: :ok
   def run_after_run_hook(workspace, issue_or_identifier) when is_binary(workspace) do
     issue_context = issue_context(issue_or_identifier)
-    hooks = Config.settings!().hooks
+    hooks = hooks()
 
     case hooks.after_run do
       nil ->
         :ok
 
       command ->
-        run_hook(command, workspace, issue_context, "after_run")
+        run_hook(command, workspace, issue_context, "after_run", hooks.timeout_ms)
         |> ignore_hook_failure()
     end
   end
 
-  defp workspace_path_for_issue(safe_id) when is_binary(safe_id) do
-    Config.settings!().workspace.root
+  @spec run_after_run_hook(map(), Path.t(), map() | String.t() | nil) :: :ok
+  def run_after_run_hook(%{} = pipeline, workspace, issue_or_identifier) when is_binary(workspace) do
+    issue_context = issue_context(issue_or_identifier)
+    hooks = hooks(pipeline)
+
+    case hooks.after_run do
+      nil ->
+        :ok
+
+      command ->
+        run_hook(command, workspace, issue_context, "after_run", hooks.timeout_ms)
+        |> ignore_hook_failure()
+    end
+  end
+
+  defp workspace_path_for_issue(workspace_root, safe_id)
+       when is_binary(workspace_root) and is_binary(safe_id) do
+    workspace_root
     |> Path.join(safe_id)
     |> PathSafety.canonicalize()
   end
@@ -128,9 +190,7 @@ defmodule SymphonyElixir.Workspace do
     end)
   end
 
-  defp maybe_run_after_create_hook(workspace, issue_context, created?) do
-    hooks = Config.settings!().hooks
-
+  defp maybe_run_after_create_hook(workspace, issue_context, created?, hooks) do
     case created? do
       true ->
         case hooks.after_create do
@@ -138,7 +198,7 @@ defmodule SymphonyElixir.Workspace do
             :ok
 
           command ->
-            run_hook(command, workspace, issue_context, "after_create")
+            run_hook(command, workspace, issue_context, "after_create", hooks.timeout_ms)
         end
 
       false ->
@@ -146,9 +206,7 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  defp maybe_run_before_remove_hook(workspace) do
-    hooks = Config.settings!().hooks
-
+  defp maybe_run_before_remove_hook(workspace, hooks) do
     case File.dir?(workspace) do
       true ->
         case hooks.before_remove do
@@ -160,7 +218,8 @@ defmodule SymphonyElixir.Workspace do
               command,
               workspace,
               %{issue_id: nil, issue_identifier: Path.basename(workspace)},
-              "before_remove"
+              "before_remove",
+              hooks.timeout_ms
             )
             |> ignore_hook_failure()
         end
@@ -173,9 +232,7 @@ defmodule SymphonyElixir.Workspace do
   defp ignore_hook_failure(:ok), do: :ok
   defp ignore_hook_failure({:error, _reason}), do: :ok
 
-  defp run_hook(command, workspace, issue_context, hook_name) do
-    timeout_ms = Config.settings!().hooks.timeout_ms
-
+  defp run_hook(command, workspace, issue_context, hook_name, timeout_ms) do
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace}")
 
     task =
@@ -220,9 +277,10 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  defp validate_workspace_path(workspace) when is_binary(workspace) do
+  defp validate_workspace_path(workspace, workspace_root)
+       when is_binary(workspace) and is_binary(workspace_root) do
     expanded_workspace = Path.expand(workspace)
-    expanded_root = Path.expand(Config.settings!().workspace.root)
+    expanded_root = Path.expand(workspace_root)
     expanded_root_prefix = expanded_root <> "/"
 
     with {:ok, canonical_workspace} <- PathSafety.canonicalize(expanded_workspace),
@@ -272,4 +330,20 @@ defmodule SymphonyElixir.Workspace do
   defp issue_log_context(%{issue_id: issue_id, issue_identifier: issue_identifier}) do
     "issue_id=#{issue_id || "n/a"} issue_identifier=#{issue_identifier || "issue"}"
   end
+
+  defp workspace_root do
+    Config.settings!().workspace.root
+  end
+
+  defp pipeline_workspace_root(%{workspace: %{root: root}, id: pipeline_id})
+       when is_binary(root) and is_binary(pipeline_id) do
+    Path.join(root, safe_identifier(pipeline_id))
+  end
+
+  defp hooks do
+    Config.settings!().hooks
+  end
+
+  defp hooks(%{hooks: hooks}) when is_map(hooks) or is_struct(hooks), do: hooks
+  defp hooks(_pipeline), do: hooks()
 end

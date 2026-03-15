@@ -56,6 +56,58 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Path.basename(first_workspace) == "MT_Det"
   end
 
+  test "pipeline workspace paths are namespaced by pipeline id" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-pipeline-workspace-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      write_workflow_file!(Workflow.workflow_file_path(), workspace_root: workspace_root)
+
+      pipeline = pipeline_fixture("pipeline-a", %{"workspace" => %{"root" => workspace_root}})
+
+      expected_workspace = Path.join([workspace_root, "pipeline-a", "MT_Det"])
+      assert {:ok, canonical_workspace} = SymphonyElixir.PathSafety.canonicalize(expected_workspace)
+
+      assert {:ok, ^canonical_workspace} = Workspace.create_for_issue(pipeline, "MT/Det")
+      refute File.exists?(Path.join(workspace_root, "MT_Det"))
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "pipeline workspace hooks resolve from pipeline config instead of global workflow hooks" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-pipeline-hooks-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        hook_after_create: "echo global > global-hook.txt"
+      )
+
+      pipeline =
+        pipeline_fixture("pipeline-hooks", %{
+          "workspace" => %{"root" => workspace_root},
+          "hooks" => %{"after_create" => "echo pipeline > pipeline-hook.txt"}
+        })
+
+      assert {:ok, workspace} = Workspace.create_for_issue(pipeline, "MT-HOOK")
+      assert File.read!(Path.join(workspace, "pipeline-hook.txt")) == "pipeline\n"
+      refute File.exists?(Path.join(workspace, "global-hook.txt"))
+    after
+      File.rm_rf(test_root)
+    end
+  end
+
   test "workspace reuses existing issue directory without deleting local changes" do
     workspace_root =
       Path.join(
@@ -1183,4 +1235,138 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     write_workflow_file!(Workflow.workflow_file_path(), prompt: workflow_prompt)
     assert Config.workflow_prompt() == workflow_prompt
   end
+
+  test "prompt builder uses pipeline-specific prompt templates" do
+    write_workflow_file!(Workflow.workflow_file_path(), prompt: "global {{ issue.identifier }}")
+
+    pipeline =
+      pipeline_fixture("pipeline-prompt", %{
+        "prompt_template" => "pipeline {{ issue.identifier }} attempt={{ attempt }}"
+      })
+
+    issue = %Issue{
+      identifier: "MT-PIPE",
+      title: "Pipeline prompt",
+      description: "Use the pipeline prompt template",
+      state: "Todo",
+      url: "https://example.org/issues/MT-PIPE",
+      labels: ["infra"]
+    }
+
+    assert PromptBuilder.build_prompt(pipeline, issue, attempt: 2) == "pipeline MT-PIPE attempt=2"
+  end
+
+  test "agent runner uses pipeline-specific workspace namespaces and prompts" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-pipeline-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+      trace_file = Path.join(test_root, "codex.trace")
+
+      File.mkdir_p!(workspace_root)
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      trace_file="${SYMP_TEST_CODEx_TRACE:-/tmp/codex.trace}"
+      count=0
+
+      while IFS= read -r line; do
+        count=$((count + 1))
+        printf 'JSON:%s\\n' "$line" >> "$trace_file"
+        case "$count" in
+          1)
+            printf '%s\\n' '{"id":1,"result":{}}'
+            ;;
+          2)
+            ;;
+          3)
+            printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-pipeline"}}}'
+            ;;
+          4)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-pipeline"}}}'
+            printf '%s\\n' '{"method":"turn/completed"}'
+            exit 0
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+      System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      on_exit(fn -> System.delete_env("SYMP_TEST_CODEx_TRACE") end)
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        codex_command: "#{codex_binary} app-server",
+        prompt: "global {{ issue.identifier }}"
+      )
+
+      pipeline =
+        pipeline_fixture("pipeline-runner", %{
+          "workspace" => %{"root" => workspace_root},
+          "prompt_template" => "pipeline {{ issue.identifier }}"
+        })
+
+      issue = %Issue{
+        id: "issue-pipeline",
+        identifier: "MT-PIPE-RUN",
+        title: "Pipeline execution",
+        description: "Use the pipeline prompt and workspace",
+        state: "In Progress",
+        url: "https://example.org/issues/MT-PIPE-RUN",
+        labels: []
+      }
+
+      assert :ok = AgentRunner.run(pipeline, issue, max_turns: 1)
+      assert File.dir?(Path.join([workspace_root, "pipeline-runner", "MT-PIPE-RUN"]))
+
+      turn_prompts =
+        trace_file
+        |> File.read!()
+        |> String.split("\n", trim: true)
+        |> Enum.filter(&String.starts_with?(&1, "JSON:"))
+        |> Enum.map(&String.trim_leading(&1, "JSON:"))
+        |> Enum.map(&Jason.decode!/1)
+        |> Enum.filter(&(&1["method"] == "turn/start"))
+        |> Enum.map(fn payload ->
+          get_in(payload, ["params", "input"])
+          |> Enum.map_join("\n", &Map.get(&1, "text", ""))
+        end)
+
+      assert turn_prompts == ["pipeline MT-PIPE-RUN"]
+    after
+      System.delete_env("SYMP_TEST_CODEx_TRACE")
+      File.rm_rf(test_root)
+    end
+  end
+
+  defp pipeline_fixture(id, attrs) when is_binary(id) and is_map(attrs) do
+    defaults = %{
+      "id" => id,
+      "prompt_template" => "",
+      "tracker" => %{"kind" => "memory"},
+      "workspace" => %{"root" => Path.join(System.tmp_dir!(), "symphony_pipeline_workspaces")},
+      "hooks" => %{}
+    }
+
+    assert {:ok, pipeline} =
+             defaults
+             |> deep_merge(attrs)
+             |> SymphonyElixir.Pipeline.parse()
+
+    pipeline
+  end
+
+  defp deep_merge(left, right) when is_map(left) and is_map(right) do
+    Map.merge(left, right, fn _key, left_value, right_value ->
+      deep_merge(left_value, right_value)
+    end)
+  end
+
+  defp deep_merge(_left, right), do: right
 end
