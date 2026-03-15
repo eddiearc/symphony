@@ -4,7 +4,10 @@ defmodule SymphonyElixirWeb.StaticAssets do
   @dashboard_css_path Path.expand("../../priv/static/dashboard.css", __DIR__)
   @phoenix_html_js_path Application.app_dir(:phoenix_html, "priv/static/phoenix_html.js")
   @phoenix_js_path Application.app_dir(:phoenix, "priv/static/phoenix.js")
-  @phoenix_live_view_js_path Application.app_dir(:phoenix_live_view, "priv/static/phoenix_live_view.js")
+  @phoenix_live_view_js_path Application.app_dir(
+                               :phoenix_live_view,
+                               "priv/static/phoenix_live_view.js"
+                             )
 
   @external_resource @dashboard_css_path
   @external_resource @phoenix_html_js_path
@@ -20,8 +23,14 @@ defmodule SymphonyElixirWeb.StaticAssets do
     "/dashboard.css" => {"text/css", @dashboard_css},
     "/vendor/phoenix_html/phoenix_html.js" => {"application/javascript", @phoenix_html_js},
     "/vendor/phoenix/phoenix.js" => {"application/javascript", @phoenix_js},
-    "/vendor/phoenix_live_view/phoenix_live_view.js" => {"application/javascript", @phoenix_live_view_js}
+    "/vendor/phoenix_live_view/phoenix_live_view.js" =>
+      {"application/javascript", @phoenix_live_view_js}
   }
+
+  @versions Map.new(@assets, fn {path, {_content_type, body}} ->
+              {path,
+               :crypto.hash(:sha256, body) |> Base.encode16(case: :lower) |> binary_part(0, 12)}
+            end)
 
   @spec fetch(String.t()) :: {:ok, String.t(), binary()} | :error
   def fetch(path) when is_binary(path) do
@@ -29,5 +38,10 @@ defmodule SymphonyElixirWeb.StaticAssets do
       {:ok, {content_type, body}} -> {:ok, content_type, body}
       :error -> :error
     end
+  end
+
+  @spec version(String.t()) :: String.t()
+  def version(path) when is_binary(path) do
+    Map.get(@versions, path, "static")
   end
 end

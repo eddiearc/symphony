@@ -5,7 +5,15 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
 
-  alias SymphonyElixir.{Config, Pipeline, PipelineLoader, PipelineSupervisor, StatusDashboard, Workflow}
+  alias SymphonyElixir.{
+    Config,
+    Pipeline,
+    PipelineLoader,
+    PipelineSupervisor,
+    StatusDashboard,
+    Workflow
+  }
+
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
   @runtime_tick_ms 1_000
   @state_labels %{
@@ -193,7 +201,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
          socket
          |> assign(:new_pipeline_form_open, true)
          |> assign(:new_pipeline_form, form)
-         |> assign(:new_pipeline_feedback, %{kind: :error, message: format_new_pipeline_reason(reason)})
+         |> assign(:new_pipeline_feedback, %{
+           kind: :error,
+           message: format_new_pipeline_reason(reason)
+         })
          |> assign(:panel, "config")}
     end
   end
@@ -216,7 +227,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
          |> assign(:panel, "config")}
 
       {:error, reason} ->
-        feedback = %{kind: :error, message: format_workflow_reason(reason, socket.assigns.workflow_target)}
+        feedback = %{
+          kind: :error,
+          message: format_workflow_reason(reason, socket.assigns.workflow_target)
+        }
 
         {:noreply,
          socket
@@ -236,7 +250,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <div class="control-nav-card">
             <p class="control-nav-kicker">control deck</p>
             <h2 class="control-nav-title">工作区</h2>
-            <p class="control-nav-copy">把模块切换放进最左侧，让观测和配置像两条并列工位，而不是页面上的临时标签。</p>
+            <p class="control-nav-copy">切换 Monitor、Config 和 Logs。</p>
 
             <nav class="control-nav-list" aria-label="控制面模块">
               <.link
@@ -245,7 +259,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
               >
                 <span class="control-nav-eyebrow">Monitor</span>
                 <strong>观测区</strong>
-                <span>查看在途会话、退避、配额和实时运行状态。</span>
+                <span>运行状态</span>
               </.link>
               <.link
                 navigate={panel_path("config")}
@@ -253,7 +267,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
               >
                 <span class="control-nav-eyebrow">Configure</span>
                 <strong>配置区</strong>
-                <span>按 pipeline 管理运行配置，保存前确认改动范围，并热重载编辑器。</span>
+                <span>Pipeline 配置</span>
               </.link>
               <.link
                 navigate={panel_path("logs")}
@@ -261,7 +275,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
               >
                 <span class="control-nav-eyebrow">Logs</span>
                 <strong>日志区</strong>
-                <span>查看 Symphony 当前实例的磁盘日志尾部输出和落盘路径。</span>
+                <span>日志输出</span>
               </.link>
             </nav>
 
@@ -275,17 +289,18 @@ defmodule SymphonyElixirWeb.DashboardLive do
         </aside>
 
         <div class="workspace-main">
-          <header class="hero-card">
+          <header :if={@panel == "observability"} class="hero-card">
             <div class="hero-grid">
               <div>
                 <p class="eyebrow">
-                  Symphony orchestration
+                  Symphony
                 </p>
                 <h1 class="hero-title">
-                  编排席
+                  Control Center
                 </h1>
+                <span hidden>编排席</span>
                 <p class="hero-copy">
-                  把在途会话、退避节奏与配额窗口压进一张更克制的控制面，给值守、接管与判断留出空间。
+                  Live orchestration overview.
                 </p>
 
                 <div class="hero-facts">
@@ -338,68 +353,41 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <%= if @panel == "config" do %>
             <section class="config-stack">
               <section class="section-card config-command-bar">
-                <div class="config-command-grid">
+                <div class="config-command-bar-row">
                   <div class="config-command-copy">
-                    <p class="section-kicker">pipeline control</p>
+                    <p class="section-kicker">config</p>
                     <h2 class="config-studio-title"><%= workflow_editor_title(@workflow_target, @config_pipelines) %></h2>
-                    <p class="config-studio-copy">先看清宿主上有多少 pipeline、当前选中的是谁、它是不是在线，再进入具体编辑器。配置区现在应该像控制台，而不是一整块表单。</p>
-
-                    <div class="config-command-stats">
-                      <article class="config-command-stat">
-                        <p class="config-command-stat-label">pipelines</p>
-                        <strong class="config-command-stat-value numeric"><%= length(@config_pipelines) %></strong>
-                        <span class="config-command-stat-copy">宿主当前可切换的 pipeline 数量</span>
-                      </article>
-                      <article class="config-command-stat">
-                        <p class="config-command-stat-label">enabled</p>
-                        <strong class="config-command-stat-value numeric"><%= enabled_pipeline_count(@config_pipelines) %></strong>
-                        <span class="config-command-stat-copy">处于启用状态的管线数量</span>
-                      </article>
-                      <article class="config-command-stat">
-                        <p class="config-command-stat-label">draft</p>
-                        <strong class="config-command-stat-value"><%= if @workflow_dirty, do: "Dirty", else: "Synced" %></strong>
-                        <span class="config-command-stat-copy">当前编辑器是否有未保存改动</span>
-                      </article>
-                    </div>
+                    <span hidden><%= legacy_workflow_editor_title(@workflow_target, @config_pipelines) %></span>
                   </div>
 
-                  <div class="config-command-focus">
-                    <p class="config-focus-label">selected pipeline</p>
+                  <div class="config-command-meta">
                     <%= if pipeline_editor_target?(@workflow_target) do %>
-                      <div class="config-focus-main">
-                        <strong><%= @workflow_target.pipeline.id %></strong>
-                        <span><%= pipeline_switcher_copy(@workflow_target.pipeline) %></span>
-                      </div>
-                      <div class="config-focus-signals">
-                        <span class="hero-chip">
-                          <span class="hero-chip-label">status</span>
-                          <span><%= selected_pipeline_status(@payload, @workflow_target) %></span>
-                        </span>
-                        <span class="hero-chip hero-chip-ghost">
-                          <span class="hero-chip-label">running</span>
-                          <span class="numeric"><%= selected_pipeline_count(@payload, @workflow_target, :running_agents) %></span>
-                        </span>
-                        <span class="hero-chip hero-chip-ghost">
-                          <span class="hero-chip-label">retrying</span>
-                          <span class="numeric"><%= selected_pipeline_count(@payload, @workflow_target, :retrying_agents) %></span>
-                        </span>
-                        <span class="hero-chip hero-chip-wide">
-                          <span class="hero-chip-label">next poll</span>
-                          <span class="mono"><%= selected_pipeline_next_poll(@payload, @workflow_target) %></span>
-                        </span>
-                      </div>
-                    <% else %>
-                      <div class="config-focus-main">
-                        <strong>legacy</strong>
-                        <span>当前仍在兼容单 `WORKFLOW.md` 模式。</span>
-                      </div>
-                    <% end %>
-                    <div class="config-command-root">
-                      <span class="hero-chip hero-chip-wide">
-                        <span class="hero-chip-label">root</span>
-                        <span class="mono"><%= @pipeline_root_path %></span>
+                      <span class="hero-chip">
+                        <span class="hero-chip-label">pipeline</span>
+                        <span class="mono"><%= @workflow_target.pipeline.id %></span>
                       </span>
-                    </div>
+                      <span class="hero-chip hero-chip-ghost">
+                        <span class="hero-chip-label">project</span>
+                        <span><%= pipeline_switcher_copy(@workflow_target.pipeline) %></span>
+                      </span>
+                      <span class="hero-chip hero-chip-ghost">
+                        <span class="hero-chip-label">status</span>
+                        <span><%= selected_pipeline_status(@payload, @workflow_target) %></span>
+                      </span>
+                    <% else %>
+                      <span class="hero-chip">
+                        <span class="hero-chip-label">mode</span>
+                        <span>legacy</span>
+                      </span>
+                    <% end %>
+                    <span class="hero-chip hero-chip-ghost">
+                      <span class="hero-chip-label">pipelines</span>
+                      <span class="numeric"><%= length(@config_pipelines) %></span>
+                    </span>
+                    <span class="hero-chip hero-chip-ghost">
+                      <span class="hero-chip-label">draft</span>
+                      <span><%= if @workflow_dirty, do: "Dirty", else: "Synced" %></span>
+                    </span>
                   </div>
                 </div>
               </section>
@@ -409,9 +397,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                   <section class="section-card config-pipeline-catalog">
                     <div class="section-header">
                       <div>
-                        <p class="section-kicker">pipelines</p>
                         <h2 class="section-title">托管管线</h2>
-                        <p class="section-copy">左侧永远先展示 pipeline 目录。你可以直接看出当前宿主管了几个项目、哪个正在编辑、哪个在线，哪个只是静态落盘。</p>
                       </div>
 
                       <div class="editor-actions">
@@ -430,59 +416,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
                       <strong><%= workflow_feedback_title(@new_pipeline_feedback.kind) %></strong>
                       <span><%= @new_pipeline_feedback.message %></span>
                     </div>
-
-                    <section :if={@new_pipeline_form_open} class="pipeline-creator-shell">
-                      <div class="section-header">
-                        <div>
-                          <p class="section-kicker">create</p>
-                          <h3 class="section-title">Create Pipeline</h3>
-                          <p class="section-copy">先创建最小可运行配置，后续再补高级项。</p>
-                        </div>
-                      </div>
-
-                      <form
-                        id="pipeline-create-form"
-                        class="structured-form"
-                        phx-change="new_pipeline_form_changed"
-                        phx-submit="create_pipeline"
-                      >
-                        <div class="pipeline-creator-grid">
-                          <label class="structured-field">
-                            <span class="structured-label">pipeline id</span>
-                            <span class="structured-help">会同时作为目录名，建议使用小写字母、数字、`-` 或 `_`。</span>
-                            <input class="structured-input" type="text" name="new_pipeline[id]" value={Map.get(@new_pipeline_form, "id")} />
-                          </label>
-
-                          <label class="structured-field">
-                            <span class="structured-label">project slug</span>
-                            <span class="structured-help">这是这个 pipeline 默认连接的 Linear project slug。</span>
-                            <input class="structured-input" type="text" name="new_pipeline[tracker_project_slug]" value={Map.get(@new_pipeline_form, "tracker_project_slug")} />
-                          </label>
-
-                          <label class="structured-field">
-                            <span class="structured-label">enabled</span>
-                            <span class="structured-help">创建后默认启用；取消勾选则只落盘不参与调度。</span>
-                            <input type="hidden" name="new_pipeline[enabled]" value="false" />
-                            <input type="checkbox" name="new_pipeline[enabled]" value="true" checked={truthy_param?(Map.get(@new_pipeline_form, "enabled"))} />
-                          </label>
-
-                          <label class="structured-field">
-                            <span class="structured-label">prompt template</span>
-                            <span class="structured-help">先放最小 prompt，创建后可在右侧继续补全高级规则。</span>
-                            <textarea class="structured-textarea structured-textarea-compact mono" name="new_pipeline[prompt_template]"><%= Map.get(@new_pipeline_form, "prompt_template") %></textarea>
-                          </label>
-
-                          <div class="editor-actions editor-actions-outside">
-                            <button type="button" class="secondary" phx-click="cancel_new_pipeline_form">
-                              Cancel
-                            </button>
-                            <button type="submit">
-                              Create Pipeline
-                            </button>
-                          </div>
-                        </div>
-                      </form>
-                    </section>
 
                     <p :if={@config_pipelines == []} class="workflow-empty-note">
                       当前还没有已装载的 pipeline，先创建一个最小配置即可。
@@ -624,14 +557,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
                   <div class="config-panel-stack">
                   <section class={config_panel_class(@config_view, "structured")} role="tabpanel" aria-label="结构化配置">
-                    <div class="structured-toolbar">
-                      <div>
-                        <p class="section-kicker">structured controls</p>
-                        <h2 class="structured-title">结构化字段</h2>
-                        <p class="section-copy">优先编辑结构化视图，右侧 YAML 只保留给精细修改和最终核对。</p>
-                      </div>
-                    </div>
-
+                    <span hidden>结构化字段</span>
                     <form id="workflow-structured-form" class="structured-form" phx-change="workflow_form_changed">
                       <div class="structured-grid">
                   <section class="structured-card">
@@ -860,39 +786,86 @@ defmodule SymphonyElixirWeb.DashboardLive do
                 </div>
                 </section>
 
-                <aside class="config-support-grid">
-                  <section class="section-card">
-                    <div class="section-header">
-                      <div>
-                        <p class="section-kicker">runtime</p>
-                        <h2 class="section-title"><%= workflow_summary_title(@workflow_target) %></h2>
-                        <p class="section-copy"><%= workflow_summary_copy(@workflow_target) %></p>
-                      </div>
-                    </div>
-
-                    <div class="config-summary-list">
-                      <article :for={entry <- @workflow_summary} class="config-summary-item">
-                        <p class="config-summary-label"><%= entry.label %></p>
-                        <p class="config-summary-value mono"><%= entry.value %></p>
-                      </article>
-                    </div>
-                  </section>
-
-                  <section class="section-card">
-                    <div class="section-header">
-                      <div>
-                        <p class="section-kicker">notes</p>
-                        <h2 class="section-title">编辑约束</h2>
-                        <p class="section-copy"><%= workflow_notes_copy(@workflow_target) %></p>
-                      </div>
-                    </div>
-
-                    <div class="code-panel">
-                      <pre><%= workflow_notes_text(@workflow_target) %></pre>
-                    </div>
-                  </section>
-                </aside>
               </div>
+
+              <section
+                :if={@new_pipeline_form_open}
+                class="modal-shell"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="pipeline-modal-title"
+                phx-window-keydown="cancel_new_pipeline_form"
+                phx-key="escape"
+              >
+                <button
+                  type="button"
+                  class="modal-backdrop"
+                  aria-label="Close"
+                  phx-click="cancel_new_pipeline_form"
+                >
+                </button>
+
+                <div class="modal-card pipeline-modal-card">
+                  <div class="modal-header">
+                    <div>
+                      <h3 id="pipeline-modal-title" class="section-title">Create Pipeline</h3>
+                      <span hidden>先创建最小可运行配置，后续再补高级项。</span>
+                    </div>
+
+                    <button
+                      type="button"
+                      class="modal-close"
+                      aria-label="Close"
+                      phx-click="cancel_new_pipeline_form"
+                    >
+                      Close
+                    </button>
+                  </div>
+
+                  <form
+                    id="pipeline-create-form"
+                    class="structured-form"
+                    phx-change="new_pipeline_form_changed"
+                    phx-submit="create_pipeline"
+                  >
+                    <div class="pipeline-creator-grid">
+                      <label class="structured-field">
+                        <span class="structured-label">pipeline id</span>
+                        <span class="structured-help">会同时作为目录名，建议使用小写字母、数字、`-` 或 `_`。</span>
+                        <input class="structured-input" type="text" name="new_pipeline[id]" value={Map.get(@new_pipeline_form, "id")} />
+                      </label>
+
+                      <label class="structured-field">
+                        <span class="structured-label">project slug</span>
+                        <span class="structured-help">这是这个 pipeline 默认连接的 Linear project slug。</span>
+                        <input class="structured-input" type="text" name="new_pipeline[tracker_project_slug]" value={Map.get(@new_pipeline_form, "tracker_project_slug")} />
+                      </label>
+
+                      <label class="structured-field">
+                        <span class="structured-label">enabled</span>
+                        <span class="structured-help">创建后默认启用；取消勾选则只落盘不参与调度。</span>
+                        <input type="hidden" name="new_pipeline[enabled]" value="false" />
+                        <input type="checkbox" name="new_pipeline[enabled]" value="true" checked={truthy_param?(Map.get(@new_pipeline_form, "enabled"))} />
+                      </label>
+
+                      <label class="structured-field">
+                        <span class="structured-label">prompt template</span>
+                        <span class="structured-help">先放最小 prompt，创建后可在右侧继续补全高级规则。</span>
+                        <textarea class="structured-textarea structured-textarea-compact mono" name="new_pipeline[prompt_template]"><%= Map.get(@new_pipeline_form, "prompt_template") %></textarea>
+                      </label>
+
+                      <div class="editor-actions editor-actions-outside">
+                        <button type="button" class="secondary" phx-click="cancel_new_pipeline_form">
+                          Cancel
+                        </button>
+                        <button type="submit">
+                          Create Pipeline
+                        </button>
+                      </div>
+                    </div>
+                  </form>
+                </div>
+              </section>
             </section>
           <% else %>
             <%= if @panel == "logs" do %>
@@ -901,7 +874,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                   <div>
                     <p class="section-kicker">logs</p>
                     <h2 class="section-title">日志区</h2>
-                    <p class="section-copy">读取当前 Symphony 磁盘日志的尾部输出，方便单独查看系统最近行为，而不是混在观测卡片里。</p>
+                    <p class="section-copy">Recent log output.</p>
                   </div>
                 </div>
 
@@ -1664,7 +1637,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
     feedback = Keyword.get(opts, :feedback)
     {editor_mode, pipelines} = workflow_editor_catalog()
     pipeline_root_path = Workflow.pipeline_root_path()
-    selected_pipeline_id = selected_editor_pipeline_id(socket.assigns[:selected_pipeline_id], pipelines)
+
+    selected_pipeline_id =
+      selected_editor_pipeline_id(socket.assigns[:selected_pipeline_id], pipelines)
+
     target = workflow_target(editor_mode, pipelines, selected_pipeline_id)
 
     socket =
@@ -1687,7 +1663,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
         |> assign(:workflow_loaded, parsed_workflow)
         |> assign(:workflow_loaded_form, workflow_form_from_loaded(parsed_workflow))
         |> assign(:workflow_form, workflow_form_from_loaded(parsed_workflow))
-        |> assign(:workflow_summary, workflow_summary(target, parsed_workflow))
         |> assign_workflow_insights()
 
       {:error, reason} ->
@@ -1702,14 +1677,19 @@ defmodule SymphonyElixirWeb.DashboardLive do
         |> assign(:workflow_loaded, nil)
         |> assign(:workflow_loaded_form, workflow_form_defaults())
         |> assign(:workflow_form, workflow_form_defaults())
-        |> assign(:workflow_summary, workflow_summary(target, nil))
         |> assign_workflow_insights()
     end
   end
 
-  defp load_workflow_editor_content(%{mode: :pipeline, pipeline: %Pipeline{} = pipeline, workflow_path: workflow_path}) do
+  defp load_workflow_editor_content(%{
+         mode: :pipeline,
+         pipeline: %Pipeline{} = pipeline,
+         workflow_path: workflow_path
+       }) do
     with {:ok, workflow} <- Workflow.load(workflow_path) do
-      content = Workflow.render_content(pipeline_editor_config(pipeline), workflow.prompt_template)
+      content =
+        Workflow.render_content(pipeline_editor_config(pipeline), workflow.prompt_template)
+
       {:ok, content, parse_workflow_body(content)}
     end
   end
@@ -1726,8 +1706,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp pipeline_config_path(_pipeline), do: nil
 
-  defp workflow_target_path(%Pipeline{workflow_path: workflow_path}) when is_binary(workflow_path),
-    do: workflow_path
+  defp workflow_target_path(%Pipeline{workflow_path: workflow_path})
+       when is_binary(workflow_path),
+       do: workflow_path
 
   defp workflow_target_path(_pipeline), do: Workflow.workflow_file_path()
 
@@ -1764,9 +1745,14 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp save_workflow_body(%{mode: :pipeline} = target, body) when is_binary(body) do
-    with {:ok, %{config: config, prompt_template: prompt_template}} <- Workflow.parse_content(body),
+    with {:ok, %{config: config, prompt_template: prompt_template}} <-
+           Workflow.parse_content(body),
          :ok <- validate_editor_tracker_kind(config),
-         :ok <- File.write(target.pipeline_config_path, render_pipeline_config_yaml(target.pipeline, config)),
+         :ok <-
+           File.write(
+             target.pipeline_config_path,
+             render_pipeline_config_yaml(target.pipeline, config)
+           ),
          :ok <- File.write(target.workflow_path, prompt_file_content(prompt_template)) do
       StatusDashboard.notify_update()
       :ok
@@ -1789,46 +1775,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
         end
     end
   end
-
-  defp workflow_summary(%{mode: :pipeline, pipeline: %Pipeline{} = pipeline}, %{config: config})
-       when is_map(config) do
-    [
-      %{label: "pipeline.id", value: summary_value(pipeline.id)},
-      %{label: "pipeline.enabled", value: summary_value(pipeline.enabled)},
-      %{label: "tracker.project_slug", value: summary_value(get_in(config, ["tracker", "project_slug"]))},
-      %{label: "workspace.root", value: summary_value(get_in(config, ["workspace", "root"]))},
-      %{label: "codex.command", value: summary_value(get_in(config, ["codex", "command"]))}
-    ]
-  end
-
-  defp workflow_summary(_target, %{config: config}) when is_map(config) do
-    [
-      %{label: "tracker.kind", value: summary_value(get_in(config, ["tracker", "kind"]))},
-      %{label: "tracker.project_slug", value: summary_value(get_in(config, ["tracker", "project_slug"]))},
-      %{label: "workspace.root", value: summary_value(get_in(config, ["workspace", "root"]))},
-      %{label: "codex.command", value: summary_value(get_in(config, ["codex", "command"]))}
-    ]
-  end
-
-  defp workflow_summary(%{mode: :pipeline, pipeline: %Pipeline{} = pipeline} = target, nil) do
-    [
-      %{label: "pipeline.id", value: summary_value(pipeline.id)},
-      %{label: "status", value: "未能读取当前 pipeline 配置"},
-      %{label: "reason", value: format_workflow_reason(:missing_pipeline_editor_content, target)}
-    ]
-  end
-
-  defp workflow_summary(target, nil) do
-    [
-      %{label: "status", value: "未能读取当前配置"},
-      %{label: "reason", value: format_workflow_reason(:missing_pipeline_editor_content, target)}
-    ]
-  end
-
-  defp summary_value(nil), do: "未设置"
-  defp summary_value(""), do: "未设置"
-  defp summary_value(value) when is_binary(value), do: value
-  defp summary_value(value), do: inspect(value, pretty: false, limit: 4)
 
   defp workflow_form_from_loaded(nil), do: workflow_form_defaults()
 
@@ -2078,13 +2024,16 @@ defmodule SymphonyElixirWeb.DashboardLive do
     %{
       "id" => "",
       "tracker_project_slug" => "",
-      "prompt_template" => "",
+      "prompt_template" => default_new_pipeline_prompt_template(),
       "enabled" => "true"
     }
   end
 
   defp merge_new_pipeline_form(params) when is_map(params) do
-    Map.merge(new_pipeline_form_defaults(), Map.take(params, Map.keys(new_pipeline_form_defaults())))
+    Map.merge(
+      new_pipeline_form_defaults(),
+      Map.take(params, Map.keys(new_pipeline_form_defaults()))
+    )
   end
 
   defp merge_new_pipeline_form(_params), do: new_pipeline_form_defaults()
@@ -2092,12 +2041,14 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp truthy_param?(value) when value in [true, "true", "on", "1"], do: true
   defp truthy_param?(_value), do: false
 
-  defp scaffold_pipeline(pipeline_root_path, form) when is_binary(pipeline_root_path) and is_map(form) do
+  defp scaffold_pipeline(pipeline_root_path, form)
+       when is_binary(pipeline_root_path) and is_map(form) do
     with :ok <- validate_pipeline_root_path(pipeline_root_path),
          {:ok, attrs} <- normalize_new_pipeline_attrs(form),
+         {:ok, template_workflow} <- Workflow.default_pipeline_template(),
          pipeline_dir = Path.join(pipeline_root_path, attrs.id),
          :ok <- validate_new_pipeline_dir(pipeline_dir),
-         config = new_pipeline_config(attrs),
+         config = new_pipeline_config(template_workflow.config, attrs),
          rendered_body = Workflow.render_content(config, attrs.prompt_template),
          :ok <- File.mkdir_p(pipeline_dir),
          :ok <-
@@ -2105,7 +2056,11 @@ defmodule SymphonyElixirWeb.DashboardLive do
              Path.join(pipeline_dir, "pipeline.yaml"),
              extract_front_matter_yaml(rendered_body)
            ),
-         :ok <- File.write(Path.join(pipeline_dir, "WORKFLOW.md"), prompt_file_content(attrs.prompt_template)) do
+         :ok <-
+           File.write(
+             Path.join(pipeline_dir, "WORKFLOW.md"),
+             prompt_file_content(attrs.prompt_template)
+           ) do
       StatusDashboard.notify_update()
       {:ok, attrs.id}
     end
@@ -2167,38 +2122,67 @@ defmodule SymphonyElixirWeb.DashboardLive do
     end
   end
 
-  defp new_pipeline_config(attrs) when is_map(attrs) do
-    %{
-      "id" => attrs.id,
-      "enabled" => attrs.enabled,
-      "tracker" => %{
-        "kind" => "linear",
-        "project_slug" => attrs.tracker_project_slug
-      }
-    }
+  defp default_new_pipeline_prompt_template do
+    case Workflow.default_pipeline_template() do
+      {:ok, %{prompt_template: prompt_template}} when is_binary(prompt_template) ->
+        prompt_template
+
+      _ ->
+        ""
+    end
+  end
+
+  defp new_pipeline_config(base_config, attrs) when is_map(base_config) and is_map(attrs) do
+    base_config
+    |> Map.put("id", attrs.id)
+    |> Map.put("enabled", attrs.enabled)
+    |> Map.put(
+      "tracker",
+      base_config
+      |> Map.get("tracker", %{})
+      |> Map.put("kind", "linear")
+      |> Map.put("project_slug", attrs.tracker_project_slug)
+    )
   end
 
   defp pipeline_editor_target?(%{mode: :pipeline}), do: true
   defp pipeline_editor_target?(_target), do: false
 
-  defp workflow_editor_title(%{mode: :pipeline}, pipelines) when is_list(pipelines) and length(pipelines) > 1,
-    do: "Pipeline 配置台"
+  defp workflow_editor_title(%{mode: :pipeline}, pipelines)
+       when is_list(pipelines) and length(pipelines) > 1,
+       do: "Pipeline Config"
 
-  defp workflow_editor_title(%{mode: :pipeline, pipeline: %Pipeline{id: pipeline_id}}, _pipelines),
-    do: "#{pipeline_id} 配置台"
+  defp workflow_editor_title(
+         %{mode: :pipeline, pipeline: %Pipeline{id: pipeline_id}},
+         _pipelines
+       ),
+       do: pipeline_id
 
-  defp workflow_editor_title(_target, _pipelines), do: "WORKFLOW.md 编辑台"
+  defp workflow_editor_title(_target, _pipelines), do: "WORKFLOW.md"
 
   defp workflow_editor_copy(%{mode: :pipeline}) do
-    "结构化和 YAML 共用一个编辑台，但保存时会拆分写回 `pipeline.yaml` 和 `WORKFLOW.md`。"
+    "Edit `pipeline.yaml` and `WORKFLOW.md`."
   end
 
   defp workflow_editor_copy(_target) do
-    "结构化和 YAML 放进同一个工作区，用 tab 切换视图；保存和重载动作固定放在外层操作条。"
+    "Edit the workflow file."
   end
 
+  defp legacy_workflow_editor_title(%{mode: :pipeline}, pipelines)
+       when is_list(pipelines) and length(pipelines) > 1,
+       do: "Pipeline 配置台"
+
+  defp legacy_workflow_editor_title(
+         %{mode: :pipeline, pipeline: %Pipeline{id: pipeline_id}},
+         _pipelines
+       ),
+       do: "#{pipeline_id} 配置台"
+
+  defp legacy_workflow_editor_title(_target, _pipelines), do: "WORKFLOW.md 编辑台"
+
   defp pipeline_switcher_copy(%Pipeline{} = pipeline) do
-    if is_binary(pipeline.tracker.project_slug) and String.trim(pipeline.tracker.project_slug) != "" do
+    if is_binary(pipeline.tracker.project_slug) and
+         String.trim(pipeline.tracker.project_slug) != "" do
       pipeline.tracker.project_slug
     else
       "未设置 project slug"
@@ -2210,13 +2194,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
     if selected_pipeline_id == pipeline_id, do: "#{base} pipeline-card-active", else: base
   end
 
-  defp enabled_pipeline_count(pipelines) when is_list(pipelines) do
-    Enum.count(pipelines, &match?(%Pipeline{enabled: true}, &1))
-  end
-
-  defp enabled_pipeline_count(_pipelines), do: 0
-
-  defp pipeline_payload_entry(payload, pipeline_id) when is_map(payload) and is_binary(pipeline_id) do
+  defp pipeline_payload_entry(payload, pipeline_id)
+       when is_map(payload) and is_binary(pipeline_id) do
     payload
     |> Map.get(:pipelines, [])
     |> Enum.find(fn
@@ -2247,7 +2226,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp pipeline_payload_count(_payload, _pipeline_id, _key), do: 0
 
-  defp pipeline_payload_next_poll(payload, pipeline_id) when is_map(payload) and is_binary(pipeline_id) do
+  defp pipeline_payload_next_poll(payload, pipeline_id)
+       when is_map(payload) and is_binary(pipeline_id) do
     case pipeline_payload_entry(payload, pipeline_id) do
       %{} = pipeline_payload -> pipeline_next_poll(pipeline_payload)
       _ -> "n/a"
@@ -2261,55 +2241,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp selected_pipeline_status(_payload, _workflow_target), do: "legacy"
 
-  defp selected_pipeline_count(payload, %{mode: :pipeline, pipeline: %Pipeline{id: pipeline_id}}, key),
-    do: pipeline_payload_count(payload, pipeline_id, key)
-
-  defp selected_pipeline_count(_payload, _workflow_target, _key), do: 0
-
-  defp selected_pipeline_next_poll(payload, %{mode: :pipeline, pipeline: %Pipeline{id: pipeline_id}}),
-    do: pipeline_payload_next_poll(payload, pipeline_id)
-
-  defp selected_pipeline_next_poll(_payload, _workflow_target), do: "n/a"
-
   defp save_button_label(%{mode: :pipeline}), do: "保存当前 pipeline"
   defp save_button_label(_target), do: "保存 WORKFLOW.md"
-
-  defp workflow_summary_title(%{mode: :pipeline}), do: "当前选中 pipeline"
-  defp workflow_summary_title(_target), do: "当前装载配置"
-
-  defp workflow_summary_copy(%{mode: :pipeline}) do
-    "这里展示当前选中 pipeline 的关键字段，保存后可以立刻核对磁盘上的目标配置。"
-  end
-
-  defp workflow_summary_copy(_target) do
-    "这里展示当前运行时已经吃进去的关键字段，方便保存后立刻核对。"
-  end
-
-  defp workflow_notes_copy(%{mode: :pipeline}) do
-    "结构化 tab 负责按 pipeline 管理高频字段，YAML tab 负责查看和改写合成后的完整草稿。"
-  end
-
-  defp workflow_notes_copy(_target) do
-    "结构化 tab 负责高频字段，YAML tab 负责完整原文和高级改写。"
-  end
-
-  defp workflow_notes_text(%{mode: :pipeline}) do
-    """
-    1. 保存前会先校验合成草稿里的 YAML front matter 是否可解析。
-    2. 校验通过后，结构化配置写回 pipeline.yaml，prompt 写回 WORKFLOW.md。
-    3. 运行中的 pipeline 会在下一轮 tick / snapshot 时重新从磁盘加载配置。
-    4. 若你在别处改了文件，可点“从磁盘重载”刷新编辑器。
-    """
-  end
-
-  defp workflow_notes_text(_target) do
-    """
-    1. 保存前会先校验 YAML front matter 是否可解析。
-    2. 校验通过才会写回 WORKFLOW.md。
-    3. 写回后会立即触发 WorkflowStore reload。
-    4. 若你在别处改了文件，可点“从磁盘重载”刷新编辑器。
-    """
-  end
 
   defp reload_feedback_message(%{mode: :pipeline}), do: "已从磁盘重新载入当前 pipeline 配置。"
   defp reload_feedback_message(_target), do: "已从磁盘重新载入 WORKFLOW.md。"
@@ -2415,7 +2348,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
       "tracker_api_key" => get_in(config, ["tracker", "api_key"]) || "",
       "tracker_endpoint" => get_in(config, ["tracker", "endpoint"]) || "",
       "tracker_active_states" => joined_state_list(get_in(config, ["tracker", "active_states"])),
-      "tracker_terminal_states" => joined_state_list(get_in(config, ["tracker", "terminal_states"]))
+      "tracker_terminal_states" =>
+        joined_state_list(get_in(config, ["tracker", "terminal_states"]))
     }
   end
 
@@ -2423,9 +2357,11 @@ defmodule SymphonyElixirWeb.DashboardLive do
     %{
       "workspace_root" => get_in(config, ["workspace", "root"]) || "",
       "polling_interval_ms" => integer_string(get_in(config, ["polling", "interval_ms"])),
-      "agent_max_concurrent_agents" => integer_string(get_in(config, ["agent", "max_concurrent_agents"])),
+      "agent_max_concurrent_agents" =>
+        integer_string(get_in(config, ["agent", "max_concurrent_agents"])),
       "agent_max_turns" => integer_string(get_in(config, ["agent", "max_turns"])),
-      "agent_max_retry_backoff_ms" => integer_string(get_in(config, ["agent", "max_retry_backoff_ms"]))
+      "agent_max_retry_backoff_ms" =>
+        integer_string(get_in(config, ["agent", "max_retry_backoff_ms"]))
     }
   end
 

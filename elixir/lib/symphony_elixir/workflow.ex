@@ -7,7 +7,16 @@ defmodule SymphonyElixir.Workflow do
 
   @workflow_file_name "WORKFLOW.md"
   @pipelines_dir_name "pipelines"
-  @top_level_key_order ["tracker", "polling", "workspace", "agent", "codex", "hooks", "observability", "server"]
+  @top_level_key_order [
+    "tracker",
+    "polling",
+    "workspace",
+    "agent",
+    "codex",
+    "hooks",
+    "observability",
+    "server"
+  ]
 
   @spec workflow_file_path() :: Path.t()
   def workflow_file_path do
@@ -105,8 +114,25 @@ defmodule SymphonyElixir.Workflow do
     parse(content)
   end
 
+  @spec default_pipeline_template() :: {:ok, loaded_workflow()} | {:error, term()}
+  def default_pipeline_template do
+    repo_root = Path.expand("../../..", __DIR__)
+
+    case System.cmd("git", ["show", "main:elixir/WORKFLOW.md"],
+           cd: repo_root,
+           stderr_to_stdout: true
+         ) do
+      {content, 0} ->
+        parse_content(content)
+
+      {_output, _status} ->
+        load(Path.join(repo_root, "elixir/WORKFLOW.md"))
+    end
+  end
+
   @spec render_content(map(), String.t()) :: String.t()
-  def render_content(config, prompt_template) when is_map(config) and is_binary(prompt_template) do
+  def render_content(config, prompt_template)
+      when is_map(config) and is_binary(prompt_template) do
     yaml =
       config
       |> normalize_render_keys()
@@ -199,7 +225,9 @@ defmodule SymphonyElixir.Workflow do
     end)
   end
 
-  defp normalize_render_keys(value) when is_list(value), do: Enum.map(value, &normalize_render_keys/1)
+  defp normalize_render_keys(value) when is_list(value),
+    do: Enum.map(value, &normalize_render_keys/1)
+
   defp normalize_render_keys(value), do: value
 
   defp render_yaml_map(map, indent, _preferred_order) when map == %{}, do: indent(indent) <> "{}"
@@ -258,7 +286,10 @@ defmodule SymphonyElixir.Workflow do
   end
 
   defp render_yaml_scalar(value, _indent) when is_integer(value), do: Integer.to_string(value)
-  defp render_yaml_scalar(value, _indent) when is_float(value), do: :erlang.float_to_binary(value, decimals: 6)
+
+  defp render_yaml_scalar(value, _indent) when is_float(value),
+    do: :erlang.float_to_binary(value, decimals: 6)
+
   defp render_yaml_scalar(true, _indent), do: "true"
   defp render_yaml_scalar(false, _indent), do: "false"
   defp render_yaml_scalar(nil, _indent), do: "null"
