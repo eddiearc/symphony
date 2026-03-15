@@ -337,83 +337,116 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
           <%= if @panel == "config" do %>
             <section class="config-stack">
-              <section class="section-card section-card-main config-editor-card config-studio-card">
-                <div class="config-studio-head">
-                  <div>
-                    <p class="section-kicker">workflow studio</p>
+              <section class="section-card config-command-bar">
+                <div class="config-command-grid">
+                  <div class="config-command-copy">
+                    <p class="section-kicker">pipeline control</p>
                     <h2 class="config-studio-title"><%= workflow_editor_title(@workflow_target, @config_pipelines) %></h2>
-                    <p class="config-studio-copy"><%= workflow_editor_copy(@workflow_target) %></p>
+                    <p class="config-studio-copy">先看清宿主上有多少 pipeline、当前选中的是谁、它是不是在线，再进入具体编辑器。配置区现在应该像控制台，而不是一整块表单。</p>
+
+                    <div class="config-command-stats">
+                      <article class="config-command-stat">
+                        <p class="config-command-stat-label">pipelines</p>
+                        <strong class="config-command-stat-value numeric"><%= length(@config_pipelines) %></strong>
+                        <span class="config-command-stat-copy">宿主当前可切换的 pipeline 数量</span>
+                      </article>
+                      <article class="config-command-stat">
+                        <p class="config-command-stat-label">enabled</p>
+                        <strong class="config-command-stat-value numeric"><%= enabled_pipeline_count(@config_pipelines) %></strong>
+                        <span class="config-command-stat-copy">处于启用状态的管线数量</span>
+                      </article>
+                      <article class="config-command-stat">
+                        <p class="config-command-stat-label">draft</p>
+                        <strong class="config-command-stat-value"><%= if @workflow_dirty, do: "Dirty", else: "Synced" %></strong>
+                        <span class="config-command-stat-copy">当前编辑器是否有未保存改动</span>
+                      </article>
+                    </div>
                   </div>
 
-                  <div class="config-chip-stack">
+                  <div class="config-command-focus">
+                    <p class="config-focus-label">selected pipeline</p>
                     <%= if pipeline_editor_target?(@workflow_target) do %>
-                      <span class="hero-chip">
-                        <span class="hero-chip-label">pipeline</span>
-                        <span class="mono"><%= @workflow_target.pipeline.id %></span>
-                      </span>
-                      <span class="hero-chip hero-chip-wide">
-                        <span class="hero-chip-label">pipeline.yaml</span>
-                        <span class="mono"><%= @workflow_pipeline_config_path %></span>
-                      </span>
-                      <span class="hero-chip hero-chip-wide">
-                        <span class="hero-chip-label">WORKFLOW.md</span>
-                        <span class="mono"><%= @workflow_path %></span>
-                      </span>
+                      <div class="config-focus-main">
+                        <strong><%= @workflow_target.pipeline.id %></strong>
+                        <span><%= pipeline_switcher_copy(@workflow_target.pipeline) %></span>
+                      </div>
+                      <div class="config-focus-signals">
+                        <span class="hero-chip">
+                          <span class="hero-chip-label">status</span>
+                          <span><%= selected_pipeline_status(@payload, @workflow_target) %></span>
+                        </span>
+                        <span class="hero-chip hero-chip-ghost">
+                          <span class="hero-chip-label">running</span>
+                          <span class="numeric"><%= selected_pipeline_count(@payload, @workflow_target, :running_agents) %></span>
+                        </span>
+                        <span class="hero-chip hero-chip-ghost">
+                          <span class="hero-chip-label">retrying</span>
+                          <span class="numeric"><%= selected_pipeline_count(@payload, @workflow_target, :retrying_agents) %></span>
+                        </span>
+                        <span class="hero-chip hero-chip-wide">
+                          <span class="hero-chip-label">next poll</span>
+                          <span class="mono"><%= selected_pipeline_next_poll(@payload, @workflow_target) %></span>
+                        </span>
+                      </div>
                     <% else %>
-                      <span class="hero-chip hero-chip-wide">
-                        <span class="hero-chip-label">path</span>
-                        <span class="mono"><%= @workflow_path %></span>
-                      </span>
+                      <div class="config-focus-main">
+                        <strong>legacy</strong>
+                        <span>当前仍在兼容单 `WORKFLOW.md` 模式。</span>
+                      </div>
                     <% end %>
-                    <span :if={@workflow_dirty} class="hero-chip hero-chip-warning">
-                      <span class="hero-chip-label">draft</span>
-                      <span class="mono">有未保存改动</span>
-                    </span>
+                    <div class="config-command-root">
+                      <span class="hero-chip hero-chip-wide">
+                        <span class="hero-chip-label">root</span>
+                        <span class="mono"><%= @pipeline_root_path %></span>
+                      </span>
+                    </div>
                   </div>
                 </div>
+              </section>
 
-                <section :if={@pipeline_root_available} class="config-pipeline-switcher">
-                  <div class="section-header">
-                    <div>
-                      <p class="section-kicker">pipelines</p>
-                      <h2 class="section-title">托管管线</h2>
-                      <p class="section-copy">配置区现在按 pipeline 维度编辑；你可以在这里切换现有管线，也可以直接新增最小可运行 pipeline。</p>
-                    </div>
-
-                    <div class="editor-actions">
-                      <button
-                        id="open-new-pipeline"
-                        type="button"
-                        class="secondary"
-                        phx-click="open_new_pipeline_form"
-                      >
-                        + New Pipeline
-                      </button>
-                    </div>
-                  </div>
-
-                  <div :if={@new_pipeline_feedback} class={workflow_feedback_class(@new_pipeline_feedback.kind)}>
-                    <strong><%= workflow_feedback_title(@new_pipeline_feedback.kind) %></strong>
-                    <span><%= @new_pipeline_feedback.message %></span>
-                  </div>
-
-                  <section :if={@new_pipeline_form_open} class="section-card">
+              <div class="config-workbench">
+                <aside :if={@pipeline_root_available} class="config-pipeline-column">
+                  <section class="section-card config-pipeline-catalog">
                     <div class="section-header">
                       <div>
-                        <p class="section-kicker">create</p>
-                        <h3 class="section-title">Create Pipeline</h3>
-                        <p class="section-copy">先创建最小可运行配置，后续再补高级项。</p>
+                        <p class="section-kicker">pipelines</p>
+                        <h2 class="section-title">托管管线</h2>
+                        <p class="section-copy">左侧永远先展示 pipeline 目录。你可以直接看出当前宿主管了几个项目、哪个正在编辑、哪个在线，哪个只是静态落盘。</p>
+                      </div>
+
+                      <div class="editor-actions">
+                        <button
+                          id="open-new-pipeline"
+                          type="button"
+                          class="secondary"
+                          phx-click="open_new_pipeline_form"
+                        >
+                          + New Pipeline
+                        </button>
                       </div>
                     </div>
 
-                    <form
-                      id="pipeline-create-form"
-                      class="structured-form"
-                      phx-change="new_pipeline_form_changed"
-                      phx-submit="create_pipeline"
-                    >
-                      <div class="structured-grid">
-                        <section class="structured-card">
+                    <div :if={@new_pipeline_feedback} class={workflow_feedback_class(@new_pipeline_feedback.kind)}>
+                      <strong><%= workflow_feedback_title(@new_pipeline_feedback.kind) %></strong>
+                      <span><%= @new_pipeline_feedback.message %></span>
+                    </div>
+
+                    <section :if={@new_pipeline_form_open} class="pipeline-creator-shell">
+                      <div class="section-header">
+                        <div>
+                          <p class="section-kicker">create</p>
+                          <h3 class="section-title">Create Pipeline</h3>
+                          <p class="section-copy">先创建最小可运行配置，后续再补高级项。</p>
+                        </div>
+                      </div>
+
+                      <form
+                        id="pipeline-create-form"
+                        class="structured-form"
+                        phx-change="new_pipeline_form_changed"
+                        phx-submit="create_pipeline"
+                      >
+                        <div class="pipeline-creator-grid">
                           <label class="structured-field">
                             <span class="structured-label">pipeline id</span>
                             <span class="structured-help">会同时作为目录名，建议使用小写字母、数字、`-` 或 `_`。</span>
@@ -436,7 +469,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                           <label class="structured-field">
                             <span class="structured-label">prompt template</span>
                             <span class="structured-help">先放最小 prompt，创建后可在右侧继续补全高级规则。</span>
-                            <textarea class="structured-textarea mono" name="new_pipeline[prompt_template]"><%= Map.get(@new_pipeline_form, "prompt_template") %></textarea>
+                            <textarea class="structured-textarea structured-textarea-compact mono" name="new_pipeline[prompt_template]"><%= Map.get(@new_pipeline_form, "prompt_template") %></textarea>
                           </label>
 
                           <div class="editor-actions editor-actions-outside">
@@ -447,100 +480,149 @@ defmodule SymphonyElixirWeb.DashboardLive do
                               Create Pipeline
                             </button>
                           </div>
-                        </section>
-                      </div>
-                    </form>
-                  </section>
+                        </div>
+                      </form>
+                    </section>
 
-                  <p :if={@config_pipelines == []} class="workflow-empty-note">
-                    当前还没有已装载的 pipeline，先创建一个最小配置即可。
-                  </p>
+                    <p :if={@config_pipelines == []} class="workflow-empty-note">
+                      当前还没有已装载的 pipeline，先创建一个最小配置即可。
+                    </p>
 
-                  <div class="control-nav-list">
-                    <button
-                      :for={pipeline <- @config_pipelines}
-                      id={"config-pipeline-" <> pipeline.id}
-                      type="button"
-                      class={config_pipeline_button_class(@selected_pipeline_id, pipeline.id)}
-                      phx-click="select_config_pipeline"
-                      phx-value-pipeline_id={pipeline.id}
-                    >
-                      <span class="control-nav-eyebrow"><%= if pipeline.enabled, do: "Enabled", else: "Disabled" %></span>
-                      <strong><%= pipeline.id %></strong>
-                      <span><%= pipeline_switcher_copy(pipeline) %></span>
-                    </button>
-                  </div>
-                </section>
-
-                <div class="config-studio-toolbar">
-                  <div class="config-tab-row" role="tablist" aria-label="配置视图">
-                    <button
-                      type="button"
-                      class={config_tab_class(@config_view, "structured")}
-                      phx-click="switch_config_view"
-                      phx-value-view="structured"
-                    >
-                      结构化
-                    </button>
-                    <button
-                      type="button"
-                      class={config_tab_class(@config_view, "yaml")}
-                      phx-click="switch_config_view"
-                      phx-value-view="yaml"
-                    >
-                      YAML
-                    </button>
-                  </div>
-
-                  <form
-                    id="workflow-save-form"
-                    class="workflow-save-form"
-                    phx-submit="save_workflow"
-                    phx-hook="WorkflowEditor"
-                    data-save-shortcut="meta+s,ctrl+s"
-                    data-confirm-message={workflow_confirm_message(@workflow_change_manifest, @workflow_dirty, @workflow_target)}
-                  >
-                    <input type="hidden" name="workflow[body]" value={@workflow_body} />
-
-                    <div class="editor-actions editor-actions-outside">
-                      <button type="button" class="secondary" phx-click="reload_workflow">
-                        从磁盘重载
-                      </button>
-                      <button type="submit" phx-disable-with="保存中…">
-                        <%= save_button_label(@workflow_target) %>
+                    <div class="pipeline-catalog-list">
+                      <button
+                        :for={pipeline <- @config_pipelines}
+                        id={"config-pipeline-" <> pipeline.id}
+                        type="button"
+                        class={config_pipeline_button_class(@selected_pipeline_id, pipeline.id)}
+                        phx-click="select_config_pipeline"
+                        phx-value-pipeline_id={pipeline.id}
+                      >
+                        <div class="pipeline-card-head">
+                          <span class="pipeline-card-kicker"><%= if pipeline.enabled, do: "Enabled", else: "Disabled" %></span>
+                          <span class="pipeline-card-status"><%= config_pipeline_status(@payload, pipeline) %></span>
+                        </div>
+                        <strong class="pipeline-card-title"><%= pipeline.id %></strong>
+                        <span class="pipeline-card-copy"><%= pipeline_switcher_copy(pipeline) %></span>
+                        <div class="pipeline-card-signals">
+                          <span class="pipeline-card-signal">
+                            在途 <strong class="numeric"><%= pipeline_payload_count(@payload, pipeline.id, :running_agents) %></strong>
+                          </span>
+                          <span class="pipeline-card-signal">
+                            退避 <strong class="numeric"><%= pipeline_payload_count(@payload, pipeline.id, :retrying_agents) %></strong>
+                          </span>
+                          <span class="pipeline-card-signal mono">
+                            <%= pipeline_payload_next_poll(@payload, pipeline.id) %>
+                          </span>
+                        </div>
                       </button>
                     </div>
-                  </form>
-                </div>
+                  </section>
+                </aside>
 
-                <div :if={@workflow_feedback} class={workflow_feedback_class(@workflow_feedback.kind)}>
-                  <strong><%= workflow_feedback_title(@workflow_feedback.kind) %></strong>
-                  <span><%= @workflow_feedback.message %></span>
-                </div>
+                <section class="section-card section-card-main config-editor-card config-studio-card">
+                  <div class="config-studio-head">
+                    <div>
+                      <p class="section-kicker">editor</p>
+                      <h2 class="config-studio-title"><%= workflow_editor_title(@workflow_target, @config_pipelines) %></h2>
+                      <p class="config-studio-copy"><%= workflow_editor_copy(@workflow_target) %></p>
+                    </div>
 
-                <div class="workflow-meta-grid">
-                  <article class="workflow-meta-card">
-                    <p class="workflow-meta-label">草稿统计</p>
-                    <p class="workflow-meta-value numeric"><%= @workflow_stats.line_count %> 行</p>
-                    <p class="workflow-meta-copy">字符 <span class="mono"><%= @workflow_stats.char_count %></span> · YAML <span class="mono"><%= @workflow_stats.yaml_lines %></span> · Prompt <span class="mono"><%= @workflow_stats.prompt_lines %></span></p>
-                  </article>
+                    <div class="config-chip-stack">
+                      <%= if pipeline_editor_target?(@workflow_target) do %>
+                        <span class="hero-chip">
+                          <span class="hero-chip-label">pipeline</span>
+                          <span class="mono"><%= @workflow_target.pipeline.id %></span>
+                        </span>
+                        <span class="hero-chip hero-chip-wide">
+                          <span class="hero-chip-label">pipeline.yaml</span>
+                          <span class="mono"><%= @workflow_pipeline_config_path %></span>
+                        </span>
+                        <span class="hero-chip hero-chip-wide">
+                          <span class="hero-chip-label">WORKFLOW.md</span>
+                          <span class="mono"><%= @workflow_path %></span>
+                        </span>
+                      <% else %>
+                        <span class="hero-chip hero-chip-wide">
+                          <span class="hero-chip-label">path</span>
+                          <span class="mono"><%= @workflow_path %></span>
+                        </span>
+                      <% end %>
+                      <span :if={@workflow_dirty} class="hero-chip hero-chip-warning">
+                        <span class="hero-chip-label">draft</span>
+                        <span class="mono">有未保存改动</span>
+                      </span>
+                    </div>
+                  </div>
 
-                  <article class="workflow-meta-card workflow-meta-card-manifest">
-                    <p class="workflow-meta-label">变更清单</p>
-                    <%= if @workflow_change_manifest == [] do %>
-                      <p class="workflow-empty-note">当前草稿和已装载配置一致。</p>
-                    <% else %>
-                      <div class="workflow-change-list">
-                        <div :for={item <- @workflow_change_manifest} class="workflow-change-item">
-                          <span class="workflow-change-label"><%= item.label %></span>
-                          <span class="workflow-change-arrow"><%= item.before %> -> <%= item.after %></span>
-                        </div>
+                  <div class="config-studio-toolbar">
+                    <div class="config-tab-row" role="tablist" aria-label="配置视图">
+                      <button
+                        type="button"
+                        class={config_tab_class(@config_view, "structured")}
+                        phx-click="switch_config_view"
+                        phx-value-view="structured"
+                      >
+                        结构化
+                      </button>
+                      <button
+                        type="button"
+                        class={config_tab_class(@config_view, "yaml")}
+                        phx-click="switch_config_view"
+                        phx-value-view="yaml"
+                      >
+                        YAML
+                      </button>
+                    </div>
+
+                    <form
+                      id="workflow-save-form"
+                      class="workflow-save-form"
+                      phx-submit="save_workflow"
+                      phx-hook="WorkflowEditor"
+                      data-save-shortcut="meta+s,ctrl+s"
+                      data-confirm-message={workflow_confirm_message(@workflow_change_manifest, @workflow_dirty, @workflow_target)}
+                    >
+                      <input type="hidden" name="workflow[body]" value={@workflow_body} />
+
+                      <div class="editor-actions editor-actions-outside">
+                        <button type="button" class="secondary" phx-click="reload_workflow">
+                          从磁盘重载
+                        </button>
+                        <button type="submit" phx-disable-with="保存中…">
+                          <%= save_button_label(@workflow_target) %>
+                        </button>
                       </div>
-                    <% end %>
-                  </article>
-                </div>
+                    </form>
+                  </div>
 
-                <div class="config-panel-stack">
+                  <div :if={@workflow_feedback} class={workflow_feedback_class(@workflow_feedback.kind)}>
+                    <strong><%= workflow_feedback_title(@workflow_feedback.kind) %></strong>
+                    <span><%= @workflow_feedback.message %></span>
+                  </div>
+
+                  <div class="workflow-meta-grid">
+                    <article class="workflow-meta-card">
+                      <p class="workflow-meta-label">草稿统计</p>
+                      <p class="workflow-meta-value numeric"><%= @workflow_stats.line_count %> 行</p>
+                      <p class="workflow-meta-copy">字符 <span class="mono"><%= @workflow_stats.char_count %></span> · YAML <span class="mono"><%= @workflow_stats.yaml_lines %></span> · Prompt <span class="mono"><%= @workflow_stats.prompt_lines %></span></p>
+                    </article>
+
+                    <article class="workflow-meta-card workflow-meta-card-manifest">
+                      <p class="workflow-meta-label">变更清单</p>
+                      <%= if @workflow_change_manifest == [] do %>
+                        <p class="workflow-empty-note">当前草稿和已装载配置一致。</p>
+                      <% else %>
+                        <div class="workflow-change-list">
+                          <div :for={item <- @workflow_change_manifest} class="workflow-change-item">
+                            <span class="workflow-change-label"><%= item.label %></span>
+                            <span class="workflow-change-arrow"><%= item.before %> -> <%= item.after %></span>
+                          </div>
+                        </div>
+                      <% end %>
+                    </article>
+                  </div>
+
+                  <div class="config-panel-stack">
                   <section class={config_panel_class(@config_view, "structured")} role="tabpanel" aria-label="结构化配置">
                     <div class="structured-toolbar">
                       <div>
@@ -776,40 +858,41 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     </form>
                   </section>
                 </div>
-              </section>
-
-              <section class="config-support-grid">
-                <section class="section-card">
-                  <div class="section-header">
-                    <div>
-                      <p class="section-kicker">runtime</p>
-                      <h2 class="section-title"><%= workflow_summary_title(@workflow_target) %></h2>
-                      <p class="section-copy"><%= workflow_summary_copy(@workflow_target) %></p>
-                    </div>
-                  </div>
-
-                  <div class="config-summary-list">
-                    <article :for={entry <- @workflow_summary} class="config-summary-item">
-                      <p class="config-summary-label"><%= entry.label %></p>
-                      <p class="config-summary-value mono"><%= entry.value %></p>
-                    </article>
-                  </div>
                 </section>
 
-                <section class="section-card">
-                  <div class="section-header">
-                    <div>
-                      <p class="section-kicker">notes</p>
-                      <h2 class="section-title">编辑约束</h2>
-                      <p class="section-copy"><%= workflow_notes_copy(@workflow_target) %></p>
+                <aside class="config-support-grid">
+                  <section class="section-card">
+                    <div class="section-header">
+                      <div>
+                        <p class="section-kicker">runtime</p>
+                        <h2 class="section-title"><%= workflow_summary_title(@workflow_target) %></h2>
+                        <p class="section-copy"><%= workflow_summary_copy(@workflow_target) %></p>
+                      </div>
                     </div>
-                  </div>
 
-                  <div class="code-panel">
-                    <pre><%= workflow_notes_text(@workflow_target) %></pre>
-                  </div>
-                </section>
-              </section>
+                    <div class="config-summary-list">
+                      <article :for={entry <- @workflow_summary} class="config-summary-item">
+                        <p class="config-summary-label"><%= entry.label %></p>
+                        <p class="config-summary-value mono"><%= entry.value %></p>
+                      </article>
+                    </div>
+                  </section>
+
+                  <section class="section-card">
+                    <div class="section-header">
+                      <div>
+                        <p class="section-kicker">notes</p>
+                        <h2 class="section-title">编辑约束</h2>
+                        <p class="section-copy"><%= workflow_notes_copy(@workflow_target) %></p>
+                      </div>
+                    </div>
+
+                    <div class="code-panel">
+                      <pre><%= workflow_notes_text(@workflow_target) %></pre>
+                    </div>
+                  </section>
+                </aside>
+              </div>
             </section>
           <% else %>
             <%= if @panel == "logs" do %>
@@ -2123,9 +2206,70 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp config_pipeline_button_class(selected_pipeline_id, pipeline_id) do
-    base = "control-nav-link"
-    if selected_pipeline_id == pipeline_id, do: "#{base} control-nav-link-active", else: base
+    base = "pipeline-card"
+    if selected_pipeline_id == pipeline_id, do: "#{base} pipeline-card-active", else: base
   end
+
+  defp enabled_pipeline_count(pipelines) when is_list(pipelines) do
+    Enum.count(pipelines, &match?(%Pipeline{enabled: true}, &1))
+  end
+
+  defp enabled_pipeline_count(_pipelines), do: 0
+
+  defp pipeline_payload_entry(payload, pipeline_id) when is_map(payload) and is_binary(pipeline_id) do
+    payload
+    |> Map.get(:pipelines, [])
+    |> Enum.find(fn
+      %{id: id} -> id == pipeline_id
+      _ -> false
+    end)
+  end
+
+  defp pipeline_payload_entry(_payload, _pipeline_id), do: nil
+
+  defp config_pipeline_status(payload, %Pipeline{id: pipeline_id, enabled: enabled}) do
+    case pipeline_payload_entry(payload, pipeline_id) do
+      %{} = pipeline_payload ->
+        dashboard_pipeline_status(pipeline_payload)
+
+      _ ->
+        if enabled, do: "待接管", else: "未启用"
+    end
+  end
+
+  defp pipeline_payload_count(payload, pipeline_id, key)
+       when is_map(payload) and is_binary(pipeline_id) and is_atom(key) do
+    case pipeline_payload_entry(payload, pipeline_id) do
+      %{} = pipeline_payload -> Map.get(pipeline_payload, key, 0)
+      _ -> 0
+    end
+  end
+
+  defp pipeline_payload_count(_payload, _pipeline_id, _key), do: 0
+
+  defp pipeline_payload_next_poll(payload, pipeline_id) when is_map(payload) and is_binary(pipeline_id) do
+    case pipeline_payload_entry(payload, pipeline_id) do
+      %{} = pipeline_payload -> pipeline_next_poll(pipeline_payload)
+      _ -> "n/a"
+    end
+  end
+
+  defp pipeline_payload_next_poll(_payload, _pipeline_id), do: "n/a"
+
+  defp selected_pipeline_status(payload, %{mode: :pipeline, pipeline: %Pipeline{} = pipeline}),
+    do: config_pipeline_status(payload, pipeline)
+
+  defp selected_pipeline_status(_payload, _workflow_target), do: "legacy"
+
+  defp selected_pipeline_count(payload, %{mode: :pipeline, pipeline: %Pipeline{id: pipeline_id}}, key),
+    do: pipeline_payload_count(payload, pipeline_id, key)
+
+  defp selected_pipeline_count(_payload, _workflow_target, _key), do: 0
+
+  defp selected_pipeline_next_poll(payload, %{mode: :pipeline, pipeline: %Pipeline{id: pipeline_id}}),
+    do: pipeline_payload_next_poll(payload, pipeline_id)
+
+  defp selected_pipeline_next_poll(_payload, _workflow_target), do: "n/a"
 
   defp save_button_label(%{mode: :pipeline}), do: "保存当前 pipeline"
   defp save_button_label(_target), do: "保存 WORKFLOW.md"
