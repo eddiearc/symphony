@@ -7,9 +7,13 @@ defmodule SymphonyElixir.AgentRunner do
   alias SymphonyElixir.Codex.AppServer
   alias SymphonyElixir.{Config, Linear.Issue, Pipeline, PromptBuilder, Tracker, Workspace}
 
-  @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
-  def run(issue, codex_update_recipient \\ nil, opts \\ [])
+  @spec run(map()) :: :ok | no_return()
+  def run(issue), do: run(issue, nil, [])
 
+  @spec run(map(), pid() | nil) :: :ok | no_return()
+  def run(issue, codex_update_recipient), do: run(issue, codex_update_recipient, [])
+
+  @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
   def run(issue, codex_update_recipient, opts)
       when (is_map(issue) or is_struct(issue)) and
              (is_pid(codex_update_recipient) or is_nil(codex_update_recipient)) and
@@ -85,64 +89,52 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp run_codex_turns(pipeline, workspace, issue, codex_update_recipient, opts) do
     max_turns = Keyword.get(opts, :max_turns, max_turns(pipeline))
-    issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, default_issue_state_fetcher(pipeline))
 
-    with {:ok, session} <- AppServer.start_session(workspace) do
+    issue_state_fetcher =
+      Keyword.get(opts, :issue_state_fetcher, default_issue_state_fetcher(pipeline))
+
+    run_context = %{
+      pipeline: pipeline,
+      workspace: workspace,
+      codex_update_recipient: codex_update_recipient,
+      opts: opts,
+      issue_state_fetcher: issue_state_fetcher,
+      max_turns: max_turns
+    }
+
+    with {:ok, session} <- AppServer.start_session(workspace, pipeline) do
       try do
-        do_run_codex_turns(
-          session,
-          pipeline,
-          workspace,
-          issue,
-          codex_update_recipient,
-          opts,
-          issue_state_fetcher,
-          1,
-          max_turns
-        )
+        do_run_codex_turns(session, run_context, issue, 1)
       after
         AppServer.stop_session(session)
       end
     end
   end
 
-  defp do_run_codex_turns(
-         app_session,
-         pipeline,
-         workspace,
-         issue,
-         codex_update_recipient,
-         opts,
-         issue_state_fetcher,
-         turn_number,
-         max_turns
-       ) do
-    prompt = build_turn_prompt(pipeline, issue, opts, turn_number, max_turns)
+  defp do_run_codex_turns(app_session, run_context, issue, turn_number) do
+    prompt =
+      build_turn_prompt(
+        run_context.pipeline,
+        issue,
+        run_context.opts,
+        turn_number,
+        run_context.max_turns
+      )
 
     with {:ok, turn_session} <-
            AppServer.run_turn(
              app_session,
              prompt,
              issue,
-             on_message: codex_message_handler(codex_update_recipient, issue)
+             on_message: codex_message_handler(run_context.codex_update_recipient, issue)
            ) do
-      Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
+      Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{run_context.workspace} turn=#{turn_number}/#{run_context.max_turns}")
 
-      case continue_with_issue?(pipeline, issue, issue_state_fetcher) do
-        {:continue, refreshed_issue} when turn_number < max_turns ->
-          Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
+      case continue_with_issue?(run_context.pipeline, issue, run_context.issue_state_fetcher) do
+        {:continue, refreshed_issue} when turn_number < run_context.max_turns ->
+          Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{run_context.max_turns}")
 
-          do_run_codex_turns(
-            app_session,
-            pipeline,
-            workspace,
-            refreshed_issue,
-            codex_update_recipient,
-            opts,
-            issue_state_fetcher,
-            turn_number + 1,
-            max_turns
-          )
+          do_run_codex_turns(app_session, run_context, refreshed_issue, turn_number + 1)
 
         {:continue, refreshed_issue} ->
           Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
@@ -158,7 +150,8 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp build_turn_prompt(nil, issue, opts, 1, _max_turns), do: PromptBuilder.build_prompt(issue, opts)
+  defp build_turn_prompt(nil, issue, opts, 1, _max_turns),
+    do: PromptBuilder.build_prompt(issue, opts)
 
   defp build_turn_prompt(%Pipeline{} = pipeline, issue, opts, 1, _max_turns) do
     PromptBuilder.build_prompt(pipeline, issue, opts)
@@ -217,6 +210,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp raise_agent_run_failure(issue, reason, pipeline) do
     Logger.error("Agent run failed for #{issue_context(issue)}#{pipeline_log_context(pipeline)}: #{inspect(reason)}")
+
     raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
   end
 

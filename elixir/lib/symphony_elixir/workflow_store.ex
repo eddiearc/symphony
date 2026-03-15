@@ -1,6 +1,9 @@
 defmodule SymphonyElixir.WorkflowStore do
   @moduledoc """
-  Caches the last known good workflow and reloads it when `WORKFLOW.md` changes.
+  Caches the last known good legacy workflow and reloads it when `WORKFLOW.md` changes.
+
+  Multi-pipeline directory mode loads pipeline configs directly from disk; this store remains the
+  compatibility layer for single-workflow mode.
   """
 
   use GenServer

@@ -36,9 +36,9 @@ Symphony stops the active agent for that issue and cleans up matching workspaces
 4. In each pipeline directory, add:
    - `pipeline.yaml` for structured runtime settings
    - `WORKFLOW.md` for the prompt template used by Codex
-5. Enable exactly one pipeline for runtime boot today.
-   - Directory-based pipelines are now the primary configuration surface.
-   - The runtime is still single-workflow under the hood in this stage, so startup currently requires exactly one enabled pipeline. Multi-pipeline runtime comes in later orchestration work.
+5. Enable the pipelines you want this Symphony host to manage.
+   - Each enabled pipeline starts its own orchestrator under a shared supervisor.
+   - Workspaces, prompts, retry queues, and runtime status stay isolated per pipeline.
 6. Optionally copy the `commit`, `push`, `pull`, `land`, and `linear` skills to your repo.
    - The `linear` skill expects Symphony's `linear_graphql` app-server tool for raw Linear GraphQL
      operations such as comment editing or upload flows.
@@ -107,10 +107,33 @@ pipelines/
 
 `pipeline.yaml` contains structured runtime settings; `WORKFLOW.md` contains the pipeline prompt.
 
-Current runtime constraint:
+Current runtime behavior:
 - Symphony validates every enabled pipeline in the directory.
-- Symphony only boots from pipeline-root mode when there is exactly one enabled pipeline.
-- If zero or multiple enabled pipelines are present, startup fails with an actionable error instead of silently choosing one.
+- Symphony starts one orchestrator per enabled pipeline.
+- Disabled pipelines stay on disk and appear in filesystem configuration, but they do not start runtime workers.
+
+### Scaffolding a new pipeline
+
+Generate a new pipeline directory with a structured config file and prompt template:
+
+```bash
+mix pipeline.scaffold workcow \
+  --project-slug workcow-project \
+  --repo /absolute/path/to/source-repo \
+  --workspace-root /absolute/path/to/workspaces
+```
+
+This creates:
+
+```text
+pipelines/
+  workcow/
+    pipeline.yaml
+    WORKFLOW.md
+```
+
+The scaffolded `pipeline.yaml` includes the tracker target, workspace root, Codex command, and an
+`after_create` clone hook when `--repo` is provided.
 
 ### Legacy compatibility mode: single `WORKFLOW.md`
 
@@ -185,8 +208,14 @@ codex:
 - If the selected pipeline root/workflow source is missing or invalid at startup, Symphony does not boot.
 - If a later reload fails, Symphony keeps running with the last known good workflow and logs the
   reload error until the file is fixed.
-- `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API at
-  `/`, `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
+- `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API.
+- Legacy single-pipeline endpoints remain available at `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
+- Multi-pipeline control endpoints are available at:
+  - `/api/v1/pipelines`
+  - `/api/v1/pipelines/:id`
+  - `/api/v1/pipelines/:id/refresh`
+  - `/api/v1/pipelines/:id/pause`
+  - `/api/v1/pipelines/:id/resume`
 
 ## Web dashboard
 
@@ -196,6 +225,9 @@ The observability UI now runs on a minimal Phoenix stack:
 - JSON API for operational debugging under `/api/v1/*`
 - Bandit as the HTTP server
 - Phoenix dependency static assets for the LiveView client bootstrap
+
+In multi-pipeline mode, both the terminal dashboard and LiveView summarize each pipeline's status
+separately while still showing aggregate host totals.
 
 ## Project Layout
 

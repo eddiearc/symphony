@@ -1120,9 +1120,14 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       identifier: "MT-STALL",
       issue: %Issue{id: issue_id, identifier: "MT-STALL", state: "In Progress"},
       session_id: "thread-stall-turn-stall",
+      turn_count: 0,
       last_codex_message: nil,
       last_codex_timestamp: stale_activity_at,
       last_codex_event: :notification,
+      codex_app_server_pid: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
       started_at: stale_activity_at
     }
 
@@ -1133,7 +1138,19 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     end)
 
     send(pid, :tick)
-    Process.sleep(100)
+
+    wait_for_snapshot(
+      pid,
+      fn
+        %{retrying: retrying} when is_list(retrying) ->
+          Enum.any?(retrying, &match?(%{issue_id: ^issue_id}, &1))
+
+        _ ->
+          false
+      end,
+      1_000
+    )
+
     state = :sys.get_state(pid)
 
     refute Process.alive?(worker_pid)
@@ -1141,15 +1158,15 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert %{
              attempt: 1,
+             scheduled_at_ms: scheduled_at_ms,
              due_at_ms: due_at_ms,
              identifier: "MT-STALL",
              error: "stalled for " <> _
            } = state.retry_attempts[issue_id]
 
     assert is_integer(due_at_ms)
-    remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
-    assert remaining_ms >= 9_000
-    assert remaining_ms <= 10_500
+    assert is_integer(scheduled_at_ms)
+    assert due_at_ms - scheduled_at_ms == 10_000
   end
 
   test "status dashboard renders offline marker to terminal" do

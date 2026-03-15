@@ -6,11 +6,43 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
+  alias SymphonyElixir.{Config, Pipeline, PipelineLoader, PipelineSupervisor, Workflow}
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
   @spec state(Conn.t(), map()) :: Conn.t()
   def state(conn, _params) do
     json(conn, Presenter.state_payload(orchestrator(), snapshot_timeout_ms()))
+  end
+
+  @spec pipelines(Conn.t(), map()) :: Conn.t()
+  def pipelines(conn, _params) do
+    json(
+      conn,
+      Presenter.pipelines_payload(
+        pipelines_catalog(),
+        &orchestrator_for_pipeline/1,
+        snapshot_timeout_ms()
+      )
+    )
+  end
+
+  @spec pipeline(Conn.t(), map()) :: Conn.t()
+  def pipeline(conn, %{"pipeline_id" => pipeline_id}) do
+    with {:ok, pipeline} <- fetch_pipeline(pipeline_id),
+         {:ok, payload} <-
+           Presenter.pipeline_payload(
+             pipeline,
+             orchestrator_for_pipeline(pipeline_id),
+             snapshot_timeout_ms()
+           ) do
+      json(conn, payload)
+    else
+      {:error, :pipeline_not_found} ->
+        error_response(conn, 404, "pipeline_not_found", "Pipeline not found")
+
+      {:error, :unavailable} ->
+        error_response(conn, 503, "orchestrator_unavailable", "Orchestrator is unavailable")
+    end
   end
 
   @spec issue(Conn.t(), map()) :: Conn.t()
@@ -21,6 +53,57 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
       {:error, :issue_not_found} ->
         error_response(conn, 404, "issue_not_found", "Issue not found")
+    end
+  end
+
+  @spec refresh_pipeline(Conn.t(), map()) :: Conn.t()
+  def refresh_pipeline(conn, %{"pipeline_id" => pipeline_id}) do
+    with {:ok, pipeline} <- fetch_pipeline(pipeline_id),
+         {:ok, payload} <-
+           Presenter.pipeline_refresh_payload(pipeline, orchestrator_for_pipeline(pipeline_id)) do
+      conn
+      |> put_status(202)
+      |> json(payload)
+    else
+      {:error, :pipeline_not_found} ->
+        error_response(conn, 404, "pipeline_not_found", "Pipeline not found")
+
+      {:error, :unavailable} ->
+        error_response(conn, 503, "orchestrator_unavailable", "Orchestrator is unavailable")
+    end
+  end
+
+  @spec pause_pipeline(Conn.t(), map()) :: Conn.t()
+  def pause_pipeline(conn, %{"pipeline_id" => pipeline_id}) do
+    with {:ok, pipeline} <- fetch_pipeline(pipeline_id),
+         {:ok, payload} <-
+           Presenter.pipeline_pause_payload(pipeline, orchestrator_for_pipeline(pipeline_id)) do
+      conn
+      |> put_status(202)
+      |> json(payload)
+    else
+      {:error, :pipeline_not_found} ->
+        error_response(conn, 404, "pipeline_not_found", "Pipeline not found")
+
+      {:error, :unavailable} ->
+        error_response(conn, 503, "orchestrator_unavailable", "Orchestrator is unavailable")
+    end
+  end
+
+  @spec resume_pipeline(Conn.t(), map()) :: Conn.t()
+  def resume_pipeline(conn, %{"pipeline_id" => pipeline_id}) do
+    with {:ok, pipeline} <- fetch_pipeline(pipeline_id),
+         {:ok, payload} <-
+           Presenter.pipeline_resume_payload(pipeline, orchestrator_for_pipeline(pipeline_id)) do
+      conn
+      |> put_status(202)
+      |> json(payload)
+    else
+      {:error, :pipeline_not_found} ->
+        error_response(conn, 404, "pipeline_not_found", "Pipeline not found")
+
+      {:error, :unavailable} ->
+        error_response(conn, 503, "orchestrator_unavailable", "Orchestrator is unavailable")
     end
   end
 
@@ -55,6 +138,69 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   defp orchestrator do
     Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator
+  end
+
+  defp orchestrator_for_pipeline(pipeline_id) when is_binary(pipeline_id) do
+    endpoint_orchestrators = Endpoint.config(:pipeline_orchestrators)
+
+    if is_map(endpoint_orchestrators) and Map.has_key?(endpoint_orchestrators, pipeline_id) do
+      Map.get(endpoint_orchestrators, pipeline_id)
+    else
+      case PipelineSupervisor.lookup(pipeline_id, pipeline_registry_name()) do
+        {:ok, pid} ->
+          pid
+
+        :error ->
+          fallback_orchestrator_for_pipeline(pipeline_id)
+      end
+    end
+  end
+
+  defp fallback_orchestrator_for_pipeline("default"), do: orchestrator()
+  defp fallback_orchestrator_for_pipeline(_pipeline_id), do: nil
+
+  defp fetch_pipeline(pipeline_id) when is_binary(pipeline_id) do
+    case Enum.find(pipelines_catalog(), fn
+           %Pipeline{id: id} -> id == pipeline_id
+           _ -> false
+         end) do
+      %Pipeline{} = pipeline -> {:ok, pipeline}
+      _ -> {:error, :pipeline_not_found}
+    end
+  end
+
+  defp pipelines_catalog do
+    case Endpoint.config(:pipelines) do
+      pipelines when is_list(pipelines) and pipelines != [] ->
+        pipelines
+
+      _ ->
+        configured_pipelines()
+    end
+  end
+
+  defp configured_pipelines do
+    pipeline_root_path = Workflow.pipeline_root_path()
+
+    if File.dir?(pipeline_root_path) do
+      case PipelineLoader.load_pipeline_root(pipeline_root_path) do
+        {:ok, pipelines} -> pipelines
+        {:error, _reason} -> compatibility_pipeline()
+      end
+    else
+      compatibility_pipeline()
+    end
+  end
+
+  defp compatibility_pipeline do
+    case Config.current_pipeline() do
+      {:ok, pipeline} -> [pipeline]
+      {:error, _reason} -> []
+    end
+  end
+
+  defp pipeline_registry_name do
+    Endpoint.config(:pipeline_registry_name) || SymphonyElixir.PipelineRegistry
   end
 
   defp snapshot_timeout_ms do

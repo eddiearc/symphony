@@ -22,7 +22,9 @@ defmodule SymphonyElixir.Config do
 
   @type codex_runtime_settings :: %{
           approval_policy: String.t() | map(),
+          read_timeout_ms: pos_integer(),
           thread_sandbox: String.t(),
+          turn_timeout_ms: pos_integer(),
           turn_sandbox_policy: map()
         }
 
@@ -149,7 +151,9 @@ defmodule SymphonyElixir.Config do
         {:ok,
          %{
            approval_policy: settings.codex.approval_policy,
+           read_timeout_ms: settings.codex.read_timeout_ms,
            thread_sandbox: settings.codex.thread_sandbox,
+           turn_timeout_ms: settings.codex.turn_timeout_ms,
            turn_sandbox_policy: turn_sandbox_policy
          }}
       end

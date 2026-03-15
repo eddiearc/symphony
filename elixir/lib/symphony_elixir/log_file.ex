@@ -197,24 +197,24 @@ defmodule SymphonyElixir.LogFile do
         if remaining <= 0 do
           {chunks, remaining}
         else
-          size =
-            case File.stat(source_path) do
-              {:ok, %File.Stat{size: source_size}} -> source_size
-              {:error, _reason} -> 0
-            end
-
-          chunk =
-            if size > 0 do
-              read_tail_bytes(source_path, size, remaining)
-            else
-              ""
-            end
+          chunk = read_source_tail_chunk(source_path, remaining)
 
           {[chunk | chunks], max(remaining - byte_size(chunk), 0)}
         end
       end)
 
     IO.iodata_to_binary(chunks)
+  end
+
+  defp read_source_tail_chunk(source_path, remaining)
+       when is_binary(source_path) and is_integer(remaining) do
+    case File.stat(source_path) do
+      {:ok, %File.Stat{size: source_size}} when source_size > 0 ->
+        read_tail_bytes(source_path, source_size, remaining)
+
+      _ ->
+        ""
+    end
   end
 
   defp tail_lines(data, size, line_limit, byte_limit) do
@@ -232,7 +232,8 @@ defmodule SymphonyElixir.LogFile do
     }
   end
 
-  defp drop_partial_first_line(lines, size, byte_limit) when size > byte_limit and length(lines) > 1 do
+  defp drop_partial_first_line(lines, size, byte_limit)
+       when size > byte_limit and length(lines) > 1 do
     tl(lines)
   end
 

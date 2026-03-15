@@ -3,7 +3,7 @@ defmodule SymphonyElixir.HttpServer do
   Compatibility facade that starts the Phoenix observability endpoint when enabled.
   """
 
-  alias SymphonyElixir.{Config, Orchestrator}
+  alias SymphonyElixir.{Config, Orchestrator, PipelineLoader, Workflow}
   alias SymphonyElixirWeb.Endpoint
 
   @secret_key_bytes 48
@@ -22,6 +22,11 @@ defmodule SymphonyElixir.HttpServer do
       port when is_integer(port) and port >= 0 ->
         host = Keyword.get(opts, :host, Config.settings!().server.host)
         orchestrator = Keyword.get(opts, :orchestrator, Orchestrator)
+        pipelines = Keyword.get_lazy(opts, :pipelines, &load_pipelines/0)
+
+        pipeline_registry_name =
+          Keyword.get(opts, :pipeline_registry_name, SymphonyElixir.PipelineRegistry)
+
         snapshot_timeout_ms = Keyword.get(opts, :snapshot_timeout_ms, 15_000)
 
         with {:ok, ip} <- parse_host(host) do
@@ -30,6 +35,8 @@ defmodule SymphonyElixir.HttpServer do
             http: [ip: ip, port: port],
             url: [host: normalize_host(host)],
             orchestrator: orchestrator,
+            pipelines: pipelines,
+            pipeline_registry_name: pipeline_registry_name,
             snapshot_timeout_ms: snapshot_timeout_ms,
             secret_key_base: secret_key_base()
           ]
@@ -81,6 +88,26 @@ defmodule SymphonyElixir.HttpServer do
   defp normalize_host(host) when host in ["", nil], do: "127.0.0.1"
   defp normalize_host(host) when is_binary(host), do: host
   defp normalize_host(host), do: to_string(host)
+
+  defp load_pipelines do
+    pipeline_root_path = Workflow.pipeline_root_path()
+
+    if File.dir?(pipeline_root_path) do
+      case PipelineLoader.load_pipeline_root(pipeline_root_path) do
+        {:ok, pipelines} -> pipelines
+        {:error, _reason} -> compatibility_pipelines()
+      end
+    else
+      compatibility_pipelines()
+    end
+  end
+
+  defp compatibility_pipelines do
+    case Config.current_pipeline() do
+      {:ok, pipeline} -> [pipeline]
+      {:error, _reason} -> []
+    end
+  end
 
   defp secret_key_base do
     Base.encode64(:crypto.strong_rand_bytes(@secret_key_bytes), padding: false)

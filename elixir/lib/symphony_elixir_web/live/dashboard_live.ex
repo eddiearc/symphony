@@ -5,7 +5,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
 
-  alias SymphonyElixir.Workflow
+  alias SymphonyElixir.{Config, Pipeline, PipelineLoader, PipelineSupervisor, Workflow}
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
   @runtime_tick_ms 1_000
   @state_labels %{
@@ -210,9 +210,13 @@ defmodule SymphonyElixirWeb.DashboardLive do
                 </p>
 
                 <div class="hero-facts">
-                  <a :if={project_url()} class="hero-chip hero-chip-link" href={project_url()} target="_blank" rel="noreferrer">
+                  <span :if={multi_pipeline_payload?(@payload)} class="hero-chip hero-chip-ghost">
+                    <span class="hero-chip-label">pipelines</span>
+                    <span class="mono"><%= payload_pipeline_count(@payload) %></span>
+                  </span>
+                  <a :if={!multi_pipeline_payload?(@payload) and project_url()} class="hero-chip hero-chip-link" href={project_url()} target="_blank" rel="noreferrer">
                     <span class="hero-chip-label">project</span>
-                    <span class="mono"><%= SymphonyElixir.Config.linear_project_slug() %></span>
+                    <span class="mono"><%= Config.linear_project_slug() %></span>
                   </a>
                   <span class="hero-chip hero-chip-ghost">
                     <span class="hero-chip-label">mode</span>
@@ -698,6 +702,31 @@ defmodule SymphonyElixirWeb.DashboardLive do
                 </article>
               </section>
 
+              <section :if={multi_pipeline_payload?(@payload)} class="section-card">
+                <div class="section-header">
+                  <div>
+                    <p class="section-kicker">pipelines</p>
+                    <h2 class="section-title">托管管线</h2>
+                    <p class="section-copy">每条 pipeline 独立轮询、独立退避、独立 workspace；这里汇总当前宿主上的在线状态。</p>
+                  </div>
+                </div>
+
+                <div class="limit-grid">
+                  <article :for={pipeline <- @payload.pipelines} class="limit-card">
+                    <p class="limit-label"><%= pipeline.id %></p>
+                    <p class="limit-value"><%= dashboard_pipeline_status(pipeline) %></p>
+                    <p class="limit-copy">
+                      在途 <span class="numeric"><%= pipeline.running_agents %></span> ·
+                      退避 <span class="numeric"><%= pipeline.retrying_agents %></span> ·
+                      下次轮询 <span class="mono"><%= pipeline_next_poll(pipeline) %></span>
+                    </p>
+                    <a :if={pipeline.project_url} class="issue-link" href={pipeline.project_url} target="_blank" rel="noreferrer">
+                      打开 Linear
+                    </a>
+                  </article>
+                </div>
+              </section>
+
               <div class="section-layout">
                 <section class="section-card section-card-main">
                   <div class="section-header">
@@ -735,8 +764,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
                           <tr :for={entry <- @payload.running}>
                             <td>
                               <div class="issue-stack">
+                                <span :if={entry[:pipeline_id]} class="muted mono"><%= entry.pipeline_id %></span>
                                 <span class="issue-id"><%= entry.issue_identifier %></span>
-                                <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>查看 JSON</a>
+                                <a :if={!entry[:pipeline_id]} class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>查看 JSON</a>
                               </div>
                             </td>
                             <td>
@@ -856,8 +886,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
                             <tr :for={entry <- @payload.retrying}>
                               <td>
                                 <div class="issue-stack">
+                                  <span :if={entry[:pipeline_id]} class="muted mono"><%= entry.pipeline_id %></span>
                                   <span class="issue-id"><%= entry.issue_identifier %></span>
-                                  <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>查看 JSON</a>
+                                  <a :if={!entry[:pipeline_id]} class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>查看 JSON</a>
                                 </div>
                               </td>
                               <td class="numeric"><%= entry.attempt %></td>
@@ -881,12 +912,34 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp load_payload do
-    Presenter.state_payload(orchestrator(), snapshot_timeout_ms())
+    pipelines = pipelines_catalog()
+
+    if multi_pipeline_catalog?(pipelines) do
+      Presenter.dashboard_payload(pipelines, &orchestrator_for_pipeline/1, snapshot_timeout_ms())
+    else
+      Presenter.state_payload(orchestrator(), snapshot_timeout_ms())
+    end
   end
 
   defp orchestrator do
     Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator
   end
+
+  defp orchestrator_for_pipeline(pipeline_id) when is_binary(pipeline_id) do
+    endpoint_orchestrators = Endpoint.config(:pipeline_orchestrators)
+
+    if is_map(endpoint_orchestrators) and Map.has_key?(endpoint_orchestrators, pipeline_id) do
+      Map.get(endpoint_orchestrators, pipeline_id)
+    else
+      case PipelineSupervisor.lookup(pipeline_id, pipeline_registry_name()) do
+        {:ok, pid} -> pid
+        :error -> fallback_orchestrator_for_pipeline(pipeline_id)
+      end
+    end
+  end
+
+  defp fallback_orchestrator_for_pipeline("default"), do: orchestrator()
+  defp fallback_orchestrator_for_pipeline(_pipeline_id), do: nil
 
   defp snapshot_timeout_ms do
     Endpoint.config(:snapshot_timeout_ms) || 15_000
@@ -912,7 +965,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
       end)
   end
 
-  defp format_runtime_and_turns(started_at, turn_count, now) when is_integer(turn_count) and turn_count > 0 do
+  defp format_runtime_and_turns(started_at, turn_count, now)
+       when is_integer(turn_count) and turn_count > 0 do
     "#{format_runtime_seconds(runtime_seconds_from_started_at(started_at, now))} / #{turn_count}轮"
   end
 
@@ -931,7 +985,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
     DateTime.diff(now, started_at, :second)
   end
 
-  defp runtime_seconds_from_started_at(started_at, %DateTime{} = now) when is_binary(started_at) do
+  defp runtime_seconds_from_started_at(started_at, %DateTime{} = now)
+       when is_binary(started_at) do
     case DateTime.from_iso8601(started_at) do
       {:ok, parsed, _offset} -> runtime_seconds_from_started_at(parsed, now)
       _ -> 0
@@ -965,7 +1020,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
     |> normalize_display_value(@event_labels)
   end
 
-  defp display_last_message(message) when is_binary(message), do: localize_dashboard_message(message)
+  defp display_last_message(message) when is_binary(message),
+    do: localize_dashboard_message(message)
+
   defp display_last_message(message), do: message |> to_string() |> localize_dashboard_message()
 
   defp localize_dashboard_message(message) do
@@ -992,9 +1049,14 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
     Enum.reduce_while(translations, message, fn {prefix, replacement}, acc ->
       cond do
-        acc == prefix -> {:halt, replacement}
-        String.starts_with?(acc, prefix) -> {:halt, replacement <> String.replace_prefix(acc, prefix, "")}
-        true -> {:cont, acc}
+        acc == prefix ->
+          {:halt, replacement}
+
+        String.starts_with?(acc, prefix) ->
+          {:halt, replacement <> String.replace_prefix(acc, prefix, "")}
+
+        true ->
+          {:cont, acc}
       end
     end)
   end
@@ -1051,11 +1113,18 @@ defmodule SymphonyElixirWeb.DashboardLive do
     do: rate_limit_value(secondary_limit_bucket(rate_limits), [:used_percent, :usedPercent])
 
   defp format_percent(value) when is_integer(value), do: "#{value}%"
-  defp format_percent(value) when is_float(value), do: "#{:erlang.float_to_binary(value, decimals: 0)}%"
+
+  defp format_percent(value) when is_float(value),
+    do: "#{:erlang.float_to_binary(value, decimals: 0)}%"
+
   defp format_percent(_value), do: "未返回"
 
   defp format_rate_window(bucket) when is_map(bucket) do
-    window = bucket |> rate_limit_value([:window_minutes, :windowDurationMins]) |> humanize_window_minutes()
+    window =
+      bucket
+      |> rate_limit_value([:window_minutes, :windowDurationMins])
+      |> humanize_window_minutes()
+
     reset_at = bucket |> rate_limit_value([:resets_at, :resetsAt]) |> display_timestamp()
     "#{window} · 重置 #{reset_at}"
   end
@@ -1110,7 +1179,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp project_url do
-    case SymphonyElixir.Config.linear_project_slug() do
+    case Config.linear_project_slug() do
       project_slug when is_binary(project_slug) and project_slug != "" ->
         "https://linear.app/project/#{project_slug}/issues"
 
@@ -1124,10 +1193,17 @@ defmodule SymphonyElixirWeb.DashboardLive do
     normalized = state |> to_string() |> String.downcase()
 
     cond do
-      String.contains?(normalized, ["progress", "running", "active"]) -> "#{base} state-badge-active"
-      String.contains?(normalized, ["blocked", "error", "failed"]) -> "#{base} state-badge-danger"
-      String.contains?(normalized, ["todo", "queued", "pending", "retry"]) -> "#{base} state-badge-warning"
-      true -> base
+      String.contains?(normalized, ["progress", "running", "active"]) ->
+        "#{base} state-badge-active"
+
+      String.contains?(normalized, ["blocked", "error", "failed"]) ->
+        "#{base} state-badge-danger"
+
+      String.contains?(normalized, ["todo", "queued", "pending", "retry"]) ->
+        "#{base} state-badge-warning"
+
+      true ->
+        base
     end
   end
 
@@ -1176,6 +1252,88 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp workflow_feedback_title(:error), do: "保存失败"
   defp workflow_feedback_title(_kind), do: "状态"
 
+  defp pipelines_catalog do
+    case Endpoint.config(:pipelines) do
+      pipelines when is_list(pipelines) and pipelines != [] ->
+        pipelines
+
+      _ ->
+        configured_pipelines()
+    end
+  end
+
+  defp configured_pipelines do
+    pipeline_root_path = Workflow.pipeline_root_path()
+
+    if File.dir?(pipeline_root_path) do
+      case PipelineLoader.load_pipeline_root(pipeline_root_path) do
+        {:ok, pipelines} -> pipelines
+        {:error, _reason} -> compatibility_pipelines()
+      end
+    else
+      compatibility_pipelines()
+    end
+  end
+
+  defp compatibility_pipelines do
+    case Config.current_pipeline() do
+      {:ok, pipeline} -> [pipeline]
+      {:error, _reason} -> []
+    end
+  end
+
+  defp multi_pipeline_catalog?(pipelines) when is_list(pipelines) do
+    pipelines
+    |> Enum.filter(&match?(%Pipeline{enabled: true}, &1))
+    |> length()
+    |> Kernel.>(1)
+  end
+
+  defp multi_pipeline_catalog?(_pipelines), do: false
+
+  defp multi_pipeline_payload?(payload) when is_map(payload) do
+    case Map.get(payload, :pipelines) do
+      pipelines when is_list(pipelines) -> length(pipelines) > 1
+      _ -> false
+    end
+  end
+
+  defp multi_pipeline_payload?(_payload), do: false
+
+  defp payload_pipeline_count(payload) when is_map(payload) do
+    payload
+    |> Map.get(:pipelines, [])
+    |> Enum.count()
+  end
+
+  defp payload_pipeline_count(_payload), do: 0
+
+  defp dashboard_pipeline_status(pipeline) when is_map(pipeline) do
+    cond do
+      pipeline.available != true -> "离线"
+      pipeline.paused == true -> "暂停中"
+      true -> "运行中"
+    end
+  end
+
+  defp dashboard_pipeline_status(_pipeline), do: "未知"
+
+  defp pipeline_next_poll(%{paused: true}), do: "paused"
+
+  defp pipeline_next_poll(%{polling: %{checking: true}}), do: "checking"
+
+  defp pipeline_next_poll(%{polling: %{next_poll_in_ms: due_in_ms}})
+       when is_integer(due_in_ms) and due_in_ms >= 0 do
+    seconds = div(due_in_ms + 999, 1000)
+    "#{seconds}s"
+  end
+
+  defp pipeline_next_poll(_pipeline), do: "n/a"
+
+  defp pipeline_registry_name do
+    Endpoint.config(:pipeline_registry_name) || SymphonyElixir.PipelineRegistry
+  end
+
   defp assign_workflow_editor(socket, opts \\ []) do
     feedback = Keyword.get(opts, :feedback)
 
@@ -1201,7 +1359,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
         |> assign(:workflow_persisted_body, "")
         |> assign(:workflow_body, "")
         |> assign(:workflow_dirty, false)
-        |> assign(:workflow_feedback, feedback || %{kind: :error, message: format_workflow_reason(reason)})
+        |> assign(
+          :workflow_feedback,
+          feedback || %{kind: :error, message: format_workflow_reason(reason)}
+        )
         |> assign(:workflow_loaded, nil)
         |> assign(:workflow_loaded_form, workflow_form_defaults())
         |> assign(:workflow_form, workflow_form_defaults())
@@ -1261,7 +1422,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
       {:ok, %{config: config}} ->
         [
           %{label: "tracker.kind", value: summary_value(get_in(config, ["tracker", "kind"]))},
-          %{label: "tracker.project_slug", value: summary_value(get_in(config, ["tracker", "project_slug"]))},
+          %{
+            label: "tracker.project_slug",
+            value: summary_value(get_in(config, ["tracker", "project_slug"]))
+          },
           %{label: "workspace.root", value: summary_value(get_in(config, ["workspace", "root"]))},
           %{label: "codex.command", value: summary_value(get_in(config, ["codex", "command"]))}
         ]
@@ -1335,23 +1499,50 @@ defmodule SymphonyElixirWeb.DashboardLive do
     config =
       base_config
       |> put_nested(["tracker", "kind"], blank_to_nil(workflow_form["tracker_kind"]))
-      |> put_nested(["tracker", "project_slug"], blank_to_nil(workflow_form["tracker_project_slug"]))
+      |> put_nested(
+        ["tracker", "project_slug"],
+        blank_to_nil(workflow_form["tracker_project_slug"])
+      )
       |> put_nested(["tracker", "api_key"], blank_to_nil(workflow_form["tracker_api_key"]))
       |> put_nested(["tracker", "endpoint"], blank_to_nil(workflow_form["tracker_endpoint"]))
-      |> put_nested(["tracker", "active_states"], csv_to_list(workflow_form["tracker_active_states"]))
-      |> put_nested(["tracker", "terminal_states"], csv_to_list(workflow_form["tracker_terminal_states"]))
+      |> put_nested(
+        ["tracker", "active_states"],
+        csv_to_list(workflow_form["tracker_active_states"])
+      )
+      |> put_nested(
+        ["tracker", "terminal_states"],
+        csv_to_list(workflow_form["tracker_terminal_states"])
+      )
       |> put_nested(["workspace", "root"], blank_to_nil(workflow_form["workspace_root"]))
-      |> put_nested(["polling", "interval_ms"], integer_or_nil(workflow_form["polling_interval_ms"]))
-      |> put_nested(["agent", "max_concurrent_agents"], integer_or_nil(workflow_form["agent_max_concurrent_agents"]))
+      |> put_nested(
+        ["polling", "interval_ms"],
+        integer_or_nil(workflow_form["polling_interval_ms"])
+      )
+      |> put_nested(
+        ["agent", "max_concurrent_agents"],
+        integer_or_nil(workflow_form["agent_max_concurrent_agents"])
+      )
       |> put_nested(["agent", "max_turns"], integer_or_nil(workflow_form["agent_max_turns"]))
-      |> put_nested(["agent", "max_retry_backoff_ms"], integer_or_nil(workflow_form["agent_max_retry_backoff_ms"]))
+      |> put_nested(
+        ["agent", "max_retry_backoff_ms"],
+        integer_or_nil(workflow_form["agent_max_retry_backoff_ms"])
+      )
       |> put_nested(["codex", "command"], blank_to_nil(workflow_form["codex_command"]))
-      |> put_nested(["codex", "thread_sandbox"], blank_to_nil(workflow_form["codex_thread_sandbox"]))
-      |> put_nested(["codex", "stall_timeout_ms"], integer_or_nil(workflow_form["codex_stall_timeout_ms"]))
+      |> put_nested(
+        ["codex", "thread_sandbox"],
+        blank_to_nil(workflow_form["codex_thread_sandbox"])
+      )
+      |> put_nested(
+        ["codex", "stall_timeout_ms"],
+        integer_or_nil(workflow_form["codex_stall_timeout_ms"])
+      )
       |> put_nested(["hooks", "after_create"], blank_to_nil(workflow_form["hooks_after_create"]))
       |> put_nested(["hooks", "before_run"], blank_to_nil(workflow_form["hooks_before_run"]))
       |> put_nested(["hooks", "after_run"], blank_to_nil(workflow_form["hooks_after_run"]))
-      |> put_nested(["hooks", "before_remove"], blank_to_nil(workflow_form["hooks_before_remove"]))
+      |> put_nested(
+        ["hooks", "before_remove"],
+        blank_to_nil(workflow_form["hooks_before_remove"])
+      )
       |> put_nested(["hooks", "timeout_ms"], integer_or_nil(workflow_form["hooks_timeout_ms"]))
 
     Workflow.render_content(config, workflow_form["prompt_template"] || "")
@@ -1372,7 +1563,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp put_or_delete(map, key, value), do: Map.put(map, key, value)
 
   defp blank_to_nil(nil), do: nil
-  defp blank_to_nil(value) when is_binary(value), do: if(String.trim(value) == "", do: nil, else: value)
+
+  defp blank_to_nil(value) when is_binary(value),
+    do: if(String.trim(value) == "", do: nil, else: value)
+
   defp blank_to_nil(value), do: value
 
   defp integer_or_nil(value) when is_binary(value) do
@@ -1486,10 +1680,17 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp workflow_change_item_summary(%{label: label, before: before_value, after: after_value}) do
     cond do
-      label == "任务模版" -> "任务模版内容已修改"
-      before_value == "未设置" -> "#{label}: 新增为 #{truncate_confirm_value(after_value)}"
-      after_value == "未设置" -> "#{label}: 已清空（原值 #{truncate_confirm_value(before_value)}）"
-      true -> "#{label}: #{truncate_confirm_value(before_value)} -> #{truncate_confirm_value(after_value)}"
+      label == "任务模版" ->
+        "任务模版内容已修改"
+
+      before_value == "未设置" ->
+        "#{label}: 新增为 #{truncate_confirm_value(after_value)}"
+
+      after_value == "未设置" ->
+        "#{label}: 已清空（原值 #{truncate_confirm_value(before_value)}）"
+
+      true ->
+        "#{label}: #{truncate_confirm_value(before_value)} -> #{truncate_confirm_value(after_value)}"
     end
   end
 
@@ -1554,10 +1755,18 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp state_chip_values(csv), do: csv_to_list(csv) || []
 
-  defp format_workflow_reason(:unsupported_memory_tracker_kind), do: "配置区不支持 `tracker.kind: memory`，请改为 `linear`。"
-  defp format_workflow_reason({:invalid_workflow_config, message}), do: "WORKFLOW.md 配置无效: #{message}"
-  defp format_workflow_reason({:workflow_parse_error, reason}), do: "WORKFLOW.md 解析失败: #{inspect(reason)}"
-  defp format_workflow_reason({:missing_workflow_file, path, reason}), do: "找不到 WORKFLOW.md: #{path} (#{inspect(reason)})"
+  defp format_workflow_reason(:unsupported_memory_tracker_kind),
+    do: "配置区不支持 `tracker.kind: memory`，请改为 `linear`。"
+
+  defp format_workflow_reason({:invalid_workflow_config, message}),
+    do: "WORKFLOW.md 配置无效: #{message}"
+
+  defp format_workflow_reason({:workflow_parse_error, reason}),
+    do: "WORKFLOW.md 解析失败: #{inspect(reason)}"
+
+  defp format_workflow_reason({:missing_workflow_file, path, reason}),
+    do: "找不到 WORKFLOW.md: #{path} (#{inspect(reason)})"
+
   defp format_workflow_reason(:workflow_front_matter_not_a_map), do: "front matter 必须是 YAML map。"
   defp format_workflow_reason(other), do: "无法保存 WORKFLOW.md: #{inspect(other)}"
 

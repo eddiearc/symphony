@@ -9,6 +9,7 @@ defmodule SymphonyElixir.PipelineSupervisor do
 
   @default_registry SymphonyElixir.PipelineRegistry
 
+  @spec child_spec(keyword()) :: Supervisor.child_spec()
   def child_spec(opts) do
     opts
     |> super()
@@ -45,7 +46,8 @@ defmodule SymphonyElixir.PipelineSupervisor do
     children =
       [
         {Registry, keys: :unique, name: registry_name}
-      ] ++ Enum.map(enabled_pipelines(pipelines), &orchestrator_child_spec(&1, registry_name, opts))
+      ] ++
+        Enum.map(enabled_pipelines(pipelines), &orchestrator_child_spec(&1, registry_name, opts))
 
     Supervisor.init(children, strategy: :one_for_one)
   end
@@ -57,7 +59,14 @@ defmodule SymphonyElixir.PipelineSupervisor do
   defp orchestrator_child_spec(%Pipeline{} = pipeline, registry_name, opts) do
     %{
       id: {:orchestrator, pipeline.id},
-      start: {Orchestrator, :start_link, [Keyword.merge([pipeline: pipeline], orchestrator_name_opts(pipeline, registry_name, opts))]},
+      start:
+        {Orchestrator, :start_link,
+         [
+           Keyword.merge(
+             [pipeline: pipeline],
+             orchestrator_name_opts(pipeline, registry_name, opts)
+           )
+         ]},
       type: :worker,
       restart: :permanent
     }
@@ -78,22 +87,23 @@ defmodule SymphonyElixir.PipelineSupervisor do
   defp load_pipelines! do
     pipeline_root_path = Workflow.pipeline_root_path()
 
-    cond do
-      File.dir?(pipeline_root_path) ->
-        case PipelineLoader.load_pipeline_root(pipeline_root_path) do
-          {:ok, pipelines} -> pipelines
-          {:error, _reason} -> [current_pipeline!()]
-        end
-
-      true ->
-        [current_pipeline!()]
+    if File.dir?(pipeline_root_path) do
+      case PipelineLoader.load_pipeline_root(pipeline_root_path) do
+        {:ok, pipelines} -> pipelines
+        {:error, _reason} -> [current_pipeline!()]
+      end
+    else
+      [current_pipeline!()]
     end
   end
 
   defp current_pipeline! do
     case Config.current_pipeline() do
-      {:ok, pipeline} -> pipeline
-      {:error, reason} -> raise ArgumentError, "unable to load current pipeline: #{inspect(reason)}"
+      {:ok, pipeline} ->
+        pipeline
+
+      {:error, reason} ->
+        raise ArgumentError, "unable to load current pipeline: #{inspect(reason)}"
     end
   end
 

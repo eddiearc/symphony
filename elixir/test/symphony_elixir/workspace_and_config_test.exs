@@ -1265,10 +1265,12 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     try do
       workspace_root = Path.join(test_root, "workspaces")
+      legacy_workspace_root = Path.join(test_root, "legacy-workspaces")
       codex_binary = Path.join(test_root, "fake-codex")
       trace_file = Path.join(test_root, "codex.trace")
 
       File.mkdir_p!(workspace_root)
+      File.mkdir_p!(legacy_workspace_root)
 
       File.write!(codex_binary, """
       #!/bin/sh
@@ -1301,7 +1303,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       on_exit(fn -> System.delete_env("SYMP_TEST_CODEx_TRACE") end)
 
       write_workflow_file!(Workflow.workflow_file_path(),
-        workspace_root: workspace_root,
+        workspace_root: legacy_workspace_root,
         codex_command: "#{codex_binary} app-server",
         prompt: "global {{ issue.identifier }}"
       )
@@ -1309,6 +1311,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       pipeline =
         pipeline_fixture("pipeline-runner", %{
           "workspace" => %{"root" => workspace_root},
+          "codex" => %{"command" => "#{codex_binary} app-server"},
           "prompt_template" => "pipeline {{ issue.identifier }}"
         })
 
@@ -1324,6 +1327,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       assert :ok = AgentRunner.run(pipeline, issue, max_turns: 1)
       assert File.dir?(Path.join([workspace_root, "pipeline-runner", "MT-PIPE-RUN"]))
+      refute File.dir?(Path.join([legacy_workspace_root, "pipeline-runner", "MT-PIPE-RUN"]))
 
       turn_prompts =
         trace_file

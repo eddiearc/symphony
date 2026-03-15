@@ -37,29 +37,16 @@ defmodule SymphonyElixir.PipelineLoader do
   def load_pipeline_root(root_path) when is_binary(root_path) do
     expanded_root = Path.expand(root_path)
 
-    with {:ok, entries} <- File.ls(expanded_root) do
-      entries
-      |> Enum.sort()
-      |> Enum.reduce_while({:ok, []}, fn entry, {:ok, acc} ->
-        pipeline_dir = Path.join(expanded_root, entry)
-
-        if File.dir?(pipeline_dir) do
-          case load_pipeline_entry(pipeline_dir) do
-            {:ok, pipeline} ->
-              {:cont, {:ok, [pipeline | acc]}}
-
-            {:error, reason} ->
-              {:halt, {:error, {:invalid_pipeline_entry, pipeline_dir, reason}}}
-          end
-        else
-          {:cont, {:ok, acc}}
+    case File.ls(expanded_root) do
+      {:ok, entries} ->
+        entries
+        |> Enum.sort()
+        |> Enum.reduce_while({:ok, []}, &accumulate_pipeline_entry(&1, expanded_root, &2))
+        |> case do
+          {:ok, pipelines} -> {:ok, Enum.reverse(pipelines)}
+          {:error, _reason} = error -> error
         end
-      end)
-      |> case do
-        {:ok, pipelines} -> {:ok, Enum.reverse(pipelines)}
-        {:error, _reason} = error -> error
-      end
-    else
+
       {:error, reason} ->
         {:error, {:invalid_pipeline_root, expanded_root, reason}}
     end
@@ -111,6 +98,22 @@ defmodule SymphonyElixir.PipelineLoader do
 
       false ->
         {:error, {:pipeline_config_not_a_map, pipeline_config_path}}
+    end
+  end
+
+  defp accumulate_pipeline_entry(entry, expanded_root, {:ok, acc}) do
+    pipeline_dir = Path.join(expanded_root, entry)
+
+    if File.dir?(pipeline_dir) do
+      case load_pipeline_entry(pipeline_dir) do
+        {:ok, pipeline} ->
+          {:cont, {:ok, [pipeline | acc]}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:invalid_pipeline_entry, pipeline_dir, reason}}}
+      end
+    else
+      {:cont, {:ok, acc}}
     end
   end
 end

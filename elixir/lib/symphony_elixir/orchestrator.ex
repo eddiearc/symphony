@@ -29,6 +29,7 @@ defmodule SymphonyElixir.Orchestrator do
     defstruct [
       :pipeline,
       :pipeline_source,
+      :paused,
       :poll_interval_ms,
       :max_concurrent_agents,
       :next_poll_due_at_ms,
@@ -58,6 +59,7 @@ defmodule SymphonyElixir.Orchestrator do
     state = %State{
       pipeline: pipeline,
       pipeline_source: pipeline_source,
+      paused: false,
       poll_interval_ms: pipeline.polling.interval_ms,
       max_concurrent_agents: pipeline.agent.max_concurrent_agents,
       next_poll_due_at_ms: now_ms,
@@ -75,6 +77,11 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @impl true
+  def handle_info({:tick, tick_token}, %{paused: true, tick_token: tick_token} = state)
+      when is_reference(tick_token) do
+    {:noreply, cancel_tick(state)}
+  end
+
   def handle_info({:tick, tick_token}, %{tick_token: tick_token} = state)
       when is_reference(tick_token) do
     state = refresh_runtime_config(state)
@@ -94,6 +101,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   def handle_info({:tick, _tick_token}, state), do: {:noreply, state}
 
+  def handle_info(:tick, %{paused: true} = state), do: {:noreply, cancel_tick(state)}
+
   def handle_info(:tick, state) do
     state = refresh_runtime_config(state)
 
@@ -108,6 +117,10 @@ defmodule SymphonyElixir.Orchestrator do
     notify_dashboard()
     :ok = schedule_poll_cycle_start()
     {:noreply, state}
+  end
+
+  def handle_info(:run_poll_cycle, %{paused: true} = state) do
+    {:noreply, %{state | poll_check_in_progress: false, next_poll_due_at_ms: nil}}
   end
 
   def handle_info(:run_poll_cycle, state) do
@@ -760,7 +773,8 @@ defmodule SymphonyElixir.Orchestrator do
     delay_ms = retry_delay(next_attempt, metadata, state.pipeline)
     old_timer = Map.get(previous_retry, :timer_ref)
     retry_token = make_ref()
-    due_at_ms = System.monotonic_time(:millisecond) + delay_ms
+    scheduled_at_ms = System.monotonic_time(:millisecond)
+    due_at_ms = scheduled_at_ms + delay_ms
     identifier = pick_retry_identifier(issue_id, previous_retry, metadata)
     error = pick_retry_error(previous_retry, metadata)
 
@@ -781,6 +795,7 @@ defmodule SymphonyElixir.Orchestrator do
             attempt: next_attempt,
             timer_ref: timer_ref,
             retry_token: retry_token,
+            scheduled_at_ms: scheduled_at_ms,
             due_at_ms: due_at_ms,
             identifier: identifier,
             error: error
@@ -1035,6 +1050,34 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  @spec pause() :: map() | :unavailable
+  def pause do
+    pause(__MODULE__)
+  end
+
+  @spec pause(GenServer.server()) :: map() | :unavailable
+  def pause(server) do
+    if server_available?(server) do
+      GenServer.call(server, :pause)
+    else
+      :unavailable
+    end
+  end
+
+  @spec resume() :: map() | :unavailable
+  def resume do
+    resume(__MODULE__)
+  end
+
+  @spec resume(GenServer.server()) :: map() | :unavailable
+  def resume(server) do
+    if server_available?(server) do
+      GenServer.call(server, :resume)
+    else
+      :unavailable
+    end
+  end
+
   @spec snapshot() :: map() | :timeout | :unavailable
   def snapshot, do: snapshot(__MODULE__, 15_000)
 
@@ -1104,9 +1147,11 @@ defmodule SymphonyElixir.Orchestrator do
      %{
        running: running,
        retrying: retrying,
+       paused: state.paused == true,
        codex_totals: state.codex_totals,
        rate_limits: Map.get(state, :codex_rate_limits),
        polling: %{
+         paused: state.paused == true,
          checking?: state.poll_check_in_progress == true,
          next_poll_in_ms: next_poll_in_ms(state.next_poll_due_at_ms, now_ms),
          poll_interval_ms: state.poll_interval_ms
@@ -1114,19 +1159,69 @@ defmodule SymphonyElixir.Orchestrator do
      }, state}
   end
 
-  def handle_call(:request_refresh, _from, state) do
-    now_ms = System.monotonic_time(:millisecond)
-    already_due? = is_integer(state.next_poll_due_at_ms) and state.next_poll_due_at_ms <= now_ms
-    coalesced = state.poll_check_in_progress == true or already_due?
-    state = if coalesced, do: state, else: schedule_tick(state, 0)
+  def handle_call(:pause, _from, state) do
+    changed = state.paused != true
+    state = cancel_tick(%{state | paused: true, poll_check_in_progress: false})
 
     {:reply,
      %{
-       queued: true,
-       coalesced: coalesced,
+       paused: true,
+       changed: changed,
        requested_at: DateTime.utc_now(),
-       operations: ["poll", "reconcile"]
+       operations: ["pause"]
      }, state}
+  end
+
+  def handle_call(:resume, _from, state) do
+    changed = state.paused == true
+
+    state =
+      state
+      |> Map.put(:paused, false)
+      |> Map.put(:poll_check_in_progress, false)
+      |> schedule_tick(0)
+
+    {:reply,
+     %{
+       paused: false,
+       changed: changed,
+       requested_at: DateTime.utc_now(),
+       operations: ["resume", "poll"]
+     }, state}
+  end
+
+  def handle_call(:request_refresh, _from, state) do
+    if state.paused == true do
+      {:reply,
+       %{
+         queued: false,
+         coalesced: true,
+         paused: true,
+         requested_at: DateTime.utc_now(),
+         operations: []
+       }, state}
+    else
+      now_ms = System.monotonic_time(:millisecond)
+      already_due? = is_integer(state.next_poll_due_at_ms) and state.next_poll_due_at_ms <= now_ms
+      coalesced = state.poll_check_in_progress == true or already_due?
+      state = if coalesced, do: state, else: schedule_tick(state, 0)
+
+      {:reply,
+       %{
+         queued: true,
+         coalesced: coalesced,
+         requested_at: DateTime.utc_now(),
+         operations: ["poll", "reconcile"]
+       }, state}
+    end
+  end
+
+  defp cancel_tick(%State{} = state) do
+    if is_reference(state.tick_timer_ref) do
+      Process.cancel_timer(state.tick_timer_ref)
+    end
+
+    %{state | tick_timer_ref: nil, tick_token: nil, next_poll_due_at_ms: nil}
   end
 
   defp integrate_codex_update(running_entry, %{event: event, timestamp: timestamp} = update) do
@@ -1496,8 +1591,6 @@ defmodule SymphonyElixir.Orchestrator do
       &Map.has_key?(payload, &1)
     )
   end
-
-  defp rate_limits_map?(_payload), do: false
 
   defp normalize_rate_limits(payload) when is_map(payload) do
     if rate_limits_map?(payload) do

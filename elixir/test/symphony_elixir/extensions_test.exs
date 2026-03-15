@@ -97,11 +97,32 @@ defmodule SymphonyElixir.ExtensionsTest do
     def init(opts), do: {:ok, opts}
 
     def handle_call(:snapshot, _from, state) do
-      {:reply, Keyword.fetch!(state, :snapshot), state}
+      snapshot =
+        state
+        |> Keyword.fetch!(:snapshot)
+        |> Map.put(:paused, Keyword.get(state, :paused, false))
+
+      {:reply, snapshot, state}
     end
 
     def handle_call(:request_refresh, _from, state) do
       {:reply, Keyword.get(state, :refresh, :unavailable), state}
+    end
+
+    def handle_call(:pause, _from, state) do
+      paused? = Keyword.get(state, :paused, false)
+      updated_state = Keyword.put(state, :paused, true)
+      reply = %{paused: true, changed: not paused?, requested_at: DateTime.utc_now(), operations: ["pause"]}
+
+      {:reply, reply, updated_state}
+    end
+
+    def handle_call(:resume, _from, state) do
+      paused? = Keyword.get(state, :paused, false)
+      updated_state = Keyword.put(state, :paused, false)
+      reply = %{paused: false, changed: paused?, requested_at: DateTime.utc_now(), operations: ["resume", "poll"]}
+
+      {:reply, reply, updated_state}
     end
   end
 
@@ -557,6 +578,162 @@ defmodule SymphonyElixir.ExtensionsTest do
              }
   end
 
+  test "phoenix observability api exposes per-pipeline state and controls" do
+    alpha_orchestrator = Module.concat(__MODULE__, :AlphaPipelineOrchestrator)
+    beta_orchestrator = Module.concat(__MODULE__, :BetaPipelineOrchestrator)
+    alpha_pipeline = pipeline_fixture("alpha", "linear", "alpha-project")
+    beta_pipeline = pipeline_fixture("beta", "linear", "beta-project")
+
+    {:ok, _alpha_pid} =
+      StaticOrchestrator.start_link(
+        name: alpha_orchestrator,
+        snapshot: static_snapshot(),
+        refresh: %{
+          queued: true,
+          coalesced: false,
+          requested_at: DateTime.utc_now(),
+          operations: ["poll", "reconcile"]
+        },
+        paused: false
+      )
+
+    {:ok, _beta_pid} =
+      StaticOrchestrator.start_link(
+        name: beta_orchestrator,
+        snapshot: %{
+          running: [],
+          retrying: [],
+          codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+          rate_limits: nil,
+          polling: %{checking?: false, next_poll_in_ms: 15_000, poll_interval_ms: 15_000}
+        },
+        refresh: %{
+          queued: true,
+          coalesced: true,
+          requested_at: DateTime.utc_now(),
+          operations: ["poll"]
+        },
+        paused: true
+      )
+
+    start_test_endpoint(
+      pipelines: [alpha_pipeline, beta_pipeline],
+      pipeline_orchestrators: %{
+        "alpha" => alpha_orchestrator,
+        "beta" => beta_orchestrator
+      },
+      snapshot_timeout_ms: 50
+    )
+
+    pipelines_payload = json_response(get(build_conn(), "/api/v1/pipelines"), 200)
+
+    assert pipelines_payload == %{
+             "generated_at" => pipelines_payload["generated_at"],
+             "pipelines" => [
+               %{
+                 "id" => "alpha",
+                 "enabled" => true,
+                 "available" => true,
+                 "paused" => false,
+                 "running_agents" => 1,
+                 "retrying_agents" => 1,
+                 "project_slug" => "alpha-project",
+                 "project_url" => "https://linear.app/project/alpha-project/issues",
+                 "workflow_path" => nil,
+                 "polling" => %{
+                   "checking" => false,
+                   "next_poll_in_ms" => nil,
+                   "poll_interval_ms" => nil
+                 }
+               },
+               %{
+                 "id" => "beta",
+                 "enabled" => true,
+                 "available" => true,
+                 "paused" => true,
+                 "running_agents" => 0,
+                 "retrying_agents" => 0,
+                 "project_slug" => "beta-project",
+                 "project_url" => "https://linear.app/project/beta-project/issues",
+                 "workflow_path" => nil,
+                 "polling" => %{
+                   "checking" => false,
+                   "next_poll_in_ms" => 15_000,
+                   "poll_interval_ms" => 15_000
+                 }
+               }
+             ]
+           }
+
+    alpha_payload = json_response(get(build_conn(), "/api/v1/pipelines/alpha"), 200)
+
+    assert alpha_payload == %{
+             "generated_at" => alpha_payload["generated_at"],
+             "pipeline" => %{
+               "id" => "alpha",
+               "enabled" => true,
+               "available" => true,
+               "paused" => false,
+               "project_slug" => "alpha-project",
+               "project_url" => "https://linear.app/project/alpha-project/issues",
+               "workflow_path" => nil
+             },
+             "counts" => %{"running" => 1, "retrying" => 1},
+             "running" => [
+               %{
+                 "issue_id" => "issue-http",
+                 "issue_identifier" => "MT-HTTP",
+                 "state" => "In Progress",
+                 "session_id" => "thread-http",
+                 "turn_count" => 7,
+                 "last_event" => "notification",
+                 "last_message" => "rendered",
+                 "started_at" => alpha_payload["running"] |> List.first() |> Map.fetch!("started_at"),
+                 "last_event_at" => nil,
+                 "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
+               }
+             ],
+             "retrying" => [
+               %{
+                 "issue_id" => "issue-retry",
+                 "issue_identifier" => "MT-RETRY",
+                 "attempt" => 2,
+                 "due_at" => alpha_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
+                 "error" => "boom"
+               }
+             ],
+             "codex_totals" => %{
+               "input_tokens" => 4,
+               "output_tokens" => 8,
+               "total_tokens" => 12,
+               "seconds_running" => 42.5
+             },
+             "rate_limits" => %{"primary" => %{"remaining" => 11}},
+             "polling" => %{
+               "checking" => false,
+               "next_poll_in_ms" => nil,
+               "poll_interval_ms" => nil
+             }
+           }
+
+    assert %{"id" => "alpha", "paused" => false, "operations" => ["poll", "reconcile"]} =
+             json_response(post(build_conn(), "/api/v1/pipelines/alpha/refresh", %{}), 202)
+
+    assert %{"id" => "beta", "paused" => true, "operations" => ["pause"]} =
+             json_response(post(build_conn(), "/api/v1/pipelines/beta/pause", %{}), 202)
+
+    assert %{"id" => "beta", "paused" => false, "operations" => ["resume", "poll"]} =
+             json_response(post(build_conn(), "/api/v1/pipelines/beta/resume", %{}), 202)
+
+    resumed_payload = json_response(get(build_conn(), "/api/v1/pipelines/beta"), 200)
+    assert resumed_payload["pipeline"]["paused"] == false
+
+    assert json_response(get(build_conn(), "/api/v1/pipelines/missing"), 404) ==
+             %{
+               "error" => %{"code" => "pipeline_not_found", "message" => "Pipeline not found"}
+             }
+  end
+
   test "dashboard bootstraps liveview from embedded static assets" do
     orchestrator_name = Module.concat(__MODULE__, :AssetOrchestrator)
 
@@ -696,6 +873,63 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert_eventually(fn ->
       render(view) =~ "Agent 内容流：structured update"
     end)
+  end
+
+  test "dashboard liveview renders a multi-pipeline host summary" do
+    alpha_orchestrator = Module.concat(__MODULE__, :DashboardAlphaOrchestrator)
+    beta_orchestrator = Module.concat(__MODULE__, :DashboardBetaOrchestrator)
+    alpha_pipeline = pipeline_fixture("alpha", "linear", "alpha-project")
+    beta_pipeline = pipeline_fixture("beta", "linear", "beta-project")
+
+    {:ok, _alpha_pid} =
+      StaticOrchestrator.start_link(
+        name: alpha_orchestrator,
+        snapshot: static_snapshot(),
+        refresh: %{queued: true, coalesced: false, requested_at: DateTime.utc_now(), operations: ["poll"]},
+        paused: false
+      )
+
+    {:ok, _beta_pid} =
+      StaticOrchestrator.start_link(
+        name: beta_orchestrator,
+        snapshot: %{
+          running: [],
+          retrying: [
+            %{
+              issue_id: "issue-beta-retry",
+              identifier: "MT-BETA",
+              attempt: 1,
+              due_in_ms: 5_000,
+              error: "paused upstream"
+            }
+          ],
+          codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+          rate_limits: nil,
+          polling: %{checking?: false, next_poll_in_ms: nil, poll_interval_ms: 15_000}
+        },
+        refresh: %{queued: false, coalesced: true, requested_at: DateTime.utc_now(), operations: []},
+        paused: true
+      )
+
+    start_test_endpoint(
+      pipelines: [alpha_pipeline, beta_pipeline],
+      pipeline_orchestrators: %{
+        "alpha" => alpha_orchestrator,
+        "beta" => beta_orchestrator
+      },
+      snapshot_timeout_ms: 50
+    )
+
+    {:ok, _view, html} = live(build_conn(), "/")
+
+    assert html =~ "托管管线"
+    assert html =~ "alpha"
+    assert html =~ "beta"
+    assert html =~ "运行中"
+    assert html =~ "暂停中"
+    assert html =~ "alpha-project"
+    assert html =~ "beta-project"
+    assert html =~ "pipelines"
   end
 
   test "dashboard liveview renders camelCase rate limits and wrapped log sources" do
