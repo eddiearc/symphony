@@ -10,9 +10,19 @@ defmodule SymphonyElixir.ExtensionsTest do
   @endpoint SymphonyElixirWeb.Endpoint
 
   defmodule FakeLinearClient do
+    def fetch_candidate_issues(%{id: pipeline_id, tracker: %{project_slug: project_slug}}) do
+      send(self(), {:fetch_candidate_issues_called, pipeline_id, project_slug})
+      {:ok, [{pipeline_id, project_slug}]}
+    end
+
     def fetch_candidate_issues do
       send(self(), :fetch_candidate_issues_called)
       {:ok, [:candidate]}
+    end
+
+    def fetch_issues_by_states(%{id: pipeline_id}, states) do
+      send(self(), {:fetch_issues_by_states_called, pipeline_id, states})
+      {:ok, states}
     end
 
     def fetch_issues_by_states(states) do
@@ -20,9 +30,27 @@ defmodule SymphonyElixir.ExtensionsTest do
       {:ok, states}
     end
 
+    def fetch_issue_states_by_ids(%{id: pipeline_id}, issue_ids) do
+      send(self(), {:fetch_issue_states_by_ids_called, pipeline_id, issue_ids})
+      {:ok, issue_ids}
+    end
+
     def fetch_issue_states_by_ids(issue_ids) do
       send(self(), {:fetch_issue_states_by_ids_called, issue_ids})
       {:ok, issue_ids}
+    end
+
+    def graphql(%{id: pipeline_id}, query, variables) do
+      send(self(), {:graphql_called, pipeline_id, query, variables})
+
+      case Process.get({__MODULE__, :graphql_results}) do
+        [result | rest] ->
+          Process.put({__MODULE__, :graphql_results}, rest)
+          result
+
+        _ ->
+          Process.get({__MODULE__, :graphql_result})
+      end
     end
 
     def graphql(query, variables) do
@@ -204,13 +232,18 @@ defmodule SymphonyElixir.ExtensionsTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
 
+    memory_pipeline = pipeline_fixture("memory-pipeline", "memory", nil)
+
     assert Config.settings!().tracker.kind == "memory"
-    assert SymphonyElixir.Tracker.adapter() == Memory
-    assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_candidate_issues()
-    assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issues_by_states([" in progress ", 42])
-    assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issue_states_by_ids(["issue-1"])
-    assert :ok = SymphonyElixir.Tracker.create_comment("issue-1", "comment")
-    assert :ok = SymphonyElixir.Tracker.update_issue_state("issue-1", "Done")
+    assert SymphonyElixir.Tracker.adapter(memory_pipeline) == Memory
+    assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_candidate_issues(memory_pipeline)
+
+    assert {:ok, [^issue]} =
+             SymphonyElixir.Tracker.fetch_issues_by_states(memory_pipeline, [" in progress ", 42])
+
+    assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issue_states_by_ids(memory_pipeline, ["issue-1"])
+    assert :ok = SymphonyElixir.Tracker.create_comment(memory_pipeline, "issue-1", "comment")
+    assert :ok = SymphonyElixir.Tracker.update_issue_state(memory_pipeline, "issue-1", "Done")
     assert_receive {:memory_tracker_comment, "issue-1", "comment"}
     assert_receive {:memory_tracker_state_update, "issue-1", "Done"}
 
@@ -218,29 +251,30 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert :ok = Memory.create_comment("issue-1", "quiet")
     assert :ok = Memory.update_issue_state("issue-1", "Quiet")
 
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
-    assert SymphonyElixir.Tracker.adapter() == Adapter
+    linear_pipeline = pipeline_fixture("linear-pipeline", "linear", "linear-project")
+    assert SymphonyElixir.Tracker.adapter(linear_pipeline) == Adapter
   end
 
   test "linear adapter delegates reads and validates mutation responses" do
     Application.put_env(:symphony_elixir, :linear_client_module, FakeLinearClient)
+    pipeline = pipeline_fixture("pipeline-a", "linear", "project-a")
 
-    assert {:ok, [:candidate]} = Adapter.fetch_candidate_issues()
-    assert_receive :fetch_candidate_issues_called
+    assert {:ok, [{"pipeline-a", "project-a"}]} = Adapter.fetch_candidate_issues(pipeline)
+    assert_receive {:fetch_candidate_issues_called, "pipeline-a", "project-a"}
 
-    assert {:ok, ["Todo"]} = Adapter.fetch_issues_by_states(["Todo"])
-    assert_receive {:fetch_issues_by_states_called, ["Todo"]}
+    assert {:ok, ["Todo"]} = Adapter.fetch_issues_by_states(pipeline, ["Todo"])
+    assert_receive {:fetch_issues_by_states_called, "pipeline-a", ["Todo"]}
 
-    assert {:ok, ["issue-1"]} = Adapter.fetch_issue_states_by_ids(["issue-1"])
-    assert_receive {:fetch_issue_states_by_ids_called, ["issue-1"]}
+    assert {:ok, ["issue-1"]} = Adapter.fetch_issue_states_by_ids(pipeline, ["issue-1"])
+    assert_receive {:fetch_issue_states_by_ids_called, "pipeline-a", ["issue-1"]}
 
     Process.put(
       {FakeLinearClient, :graphql_result},
       {:ok, %{"data" => %{"commentCreate" => %{"success" => true}}}}
     )
 
-    assert :ok = Adapter.create_comment("issue-1", "hello")
-    assert_receive {:graphql_called, create_comment_query, %{body: "hello", issueId: "issue-1"}}
+    assert :ok = Adapter.create_comment(pipeline, "issue-1", "hello")
+    assert_receive {:graphql_called, "pipeline-a", create_comment_query, %{body: "hello", issueId: "issue-1"}}
     assert create_comment_query =~ "commentCreate"
 
     Process.put(
@@ -249,17 +283,17 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     assert {:error, :comment_create_failed} =
-             Adapter.create_comment("issue-1", "broken")
+             Adapter.create_comment(pipeline, "issue-1", "broken")
 
     Process.put({FakeLinearClient, :graphql_result}, {:error, :boom})
 
-    assert {:error, :boom} = Adapter.create_comment("issue-1", "boom")
+    assert {:error, :boom} = Adapter.create_comment(pipeline, "issue-1", "boom")
 
     Process.put({FakeLinearClient, :graphql_result}, {:ok, %{"data" => %{}}})
-    assert {:error, :comment_create_failed} = Adapter.create_comment("issue-1", "weird")
+    assert {:error, :comment_create_failed} = Adapter.create_comment(pipeline, "issue-1", "weird")
 
     Process.put({FakeLinearClient, :graphql_result}, :unexpected)
-    assert {:error, :comment_create_failed} = Adapter.create_comment("issue-1", "odd")
+    assert {:error, :comment_create_failed} = Adapter.create_comment(pipeline, "issue-1", "odd")
 
     Process.put(
       {FakeLinearClient, :graphql_results},
@@ -274,11 +308,11 @@ defmodule SymphonyElixir.ExtensionsTest do
       ]
     )
 
-    assert :ok = Adapter.update_issue_state("issue-1", "Done")
-    assert_receive {:graphql_called, state_lookup_query, %{issueId: "issue-1", stateName: "Done"}}
+    assert :ok = Adapter.update_issue_state(pipeline, "issue-1", "Done")
+    assert_receive {:graphql_called, "pipeline-a", state_lookup_query, %{issueId: "issue-1", stateName: "Done"}}
     assert state_lookup_query =~ "states"
 
-    assert_receive {:graphql_called, update_issue_query, %{issueId: "issue-1", stateId: "state-1"}}
+    assert_receive {:graphql_called, "pipeline-a", update_issue_query, %{issueId: "issue-1", stateId: "state-1"}}
 
     assert update_issue_query =~ "issueUpdate"
 
@@ -296,14 +330,14 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     assert {:error, :issue_update_failed} =
-             Adapter.update_issue_state("issue-1", "Broken")
+             Adapter.update_issue_state(pipeline, "issue-1", "Broken")
 
     Process.put({FakeLinearClient, :graphql_results}, [{:error, :boom}])
 
-    assert {:error, :boom} = Adapter.update_issue_state("issue-1", "Boom")
+    assert {:error, :boom} = Adapter.update_issue_state(pipeline, "issue-1", "Boom")
 
     Process.put({FakeLinearClient, :graphql_results}, [{:ok, %{"data" => %{}}}])
-    assert {:error, :state_not_found} = Adapter.update_issue_state("issue-1", "Missing")
+    assert {:error, :state_not_found} = Adapter.update_issue_state(pipeline, "issue-1", "Missing")
 
     Process.put(
       {FakeLinearClient, :graphql_results},
@@ -318,7 +352,7 @@ defmodule SymphonyElixir.ExtensionsTest do
       ]
     )
 
-    assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Weird")
+    assert {:error, :issue_update_failed} = Adapter.update_issue_state(pipeline, "issue-1", "Weird")
 
     Process.put(
       {FakeLinearClient, :graphql_results},
@@ -333,7 +367,19 @@ defmodule SymphonyElixir.ExtensionsTest do
       ]
     )
 
-    assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Odd")
+    assert {:error, :issue_update_failed} = Adapter.update_issue_state(pipeline, "issue-1", "Odd")
+  end
+
+  test "tracker and adapter keep different project slugs isolated per pipeline" do
+    Application.put_env(:symphony_elixir, :linear_client_module, FakeLinearClient)
+
+    pipeline_a = pipeline_fixture("pipeline-a", "linear", "project-a")
+    pipeline_b = pipeline_fixture("pipeline-b", "linear", "project-b")
+
+    assert {:ok, [{"pipeline-a", "project-a"}]} = SymphonyElixir.Tracker.fetch_candidate_issues(pipeline_a)
+    assert {:ok, [{"pipeline-b", "project-b"}]} = SymphonyElixir.Tracker.fetch_candidate_issues(pipeline_b)
+    assert_receive {:fetch_candidate_issues_called, "pipeline-a", "project-a"}
+    assert_receive {:fetch_candidate_issues_called, "pipeline-b", "project-b"}
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do
@@ -1092,4 +1138,24 @@ defmodule SymphonyElixir.ExtensionsTest do
       end
     end
   end
+
+  defp pipeline_fixture(id, kind, project_slug) do
+    tracker =
+      %{
+        "kind" => kind
+      }
+      |> maybe_put("api_key", "token")
+      |> maybe_put("project_slug", project_slug)
+
+    assert {:ok, pipeline} =
+             SymphonyElixir.Pipeline.parse(%{
+               "id" => id,
+               "tracker" => tracker
+             })
+
+    pipeline
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

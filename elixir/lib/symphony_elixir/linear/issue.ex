@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Linear.Issue do
   defstruct [
     :id,
     :identifier,
+    :pipeline_id,
     :title,
     :description,
     :priority,
@@ -23,6 +24,7 @@ defmodule SymphonyElixir.Linear.Issue do
   @type t :: %__MODULE__{
           id: String.t() | nil,
           identifier: String.t() | nil,
+          pipeline_id: String.t() | nil,
           title: String.t() | nil,
           description: String.t() | nil,
           priority: integer() | nil,

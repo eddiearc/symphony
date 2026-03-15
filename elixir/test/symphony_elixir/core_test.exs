@@ -448,7 +448,112 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "linear issue state reconciliation fetch with no running issues is a no-op" do
-    assert {:ok, []} = Client.fetch_issue_states_by_ids([])
+    assert {:ok, pipeline} =
+             SymphonyElixir.Pipeline.parse(%{
+               "id" => "core-linear",
+               "tracker" => %{
+                 "kind" => "linear",
+                 "api_key" => "token",
+                 "project_slug" => "core-project"
+               }
+             })
+
+    assert {:ok, []} = Client.fetch_issue_states_by_ids(pipeline, [])
+  end
+
+  test "linear client normalization includes pipeline metadata for observability" do
+    issue =
+      Client.normalize_issue_for_test(
+        %{
+          "id" => "issue-1",
+          "identifier" => "MT-1",
+          "title" => "Pipeline metadata",
+          "description" => "details",
+          "priority" => 2,
+          "state" => %{"name" => "In Progress"},
+          "branchName" => "feat/pipeline-metadata",
+          "url" => "https://linear.app/example/issue/MT-1",
+          "assignee" => %{"id" => "assignee-1"},
+          "labels" => %{"nodes" => [%{"name" => "Bug"}]},
+          "inverseRelations" => %{"nodes" => []},
+          "createdAt" => "2026-03-14T00:00:00Z",
+          "updatedAt" => "2026-03-14T00:01:00Z"
+        },
+        nil,
+        "pipeline-a"
+      )
+
+    assert %Issue{pipeline_id: "pipeline-a"} = issue
+  end
+
+  test "linear client candidate queries remain isolated per pipeline project slug" do
+    assert {:ok, pipeline_a} =
+             SymphonyElixir.Pipeline.parse(%{
+               "id" => "pipeline-a",
+               "tracker" => %{
+                 "kind" => "linear",
+                 "api_key" => "token-a",
+                 "project_slug" => "project-a",
+                 "active_states" => ["Todo"]
+               }
+             })
+
+    assert {:ok, pipeline_b} =
+             SymphonyElixir.Pipeline.parse(%{
+               "id" => "pipeline-b",
+               "tracker" => %{
+                 "kind" => "linear",
+                 "api_key" => "token-b",
+                 "project_slug" => "project-b",
+                 "active_states" => ["Todo"]
+               }
+             })
+
+    graphql_fun = fn _query, variables ->
+      send(self(), {:graphql_project_slug, variables[:projectSlug]})
+
+      issue_id =
+        case variables[:projectSlug] do
+          "project-a" -> "issue-a"
+          "project-b" -> "issue-b"
+          _ -> "issue-unknown"
+        end
+
+      {:ok,
+       %{
+         "data" => %{
+           "issues" => %{
+             "nodes" => [
+               %{
+                 "id" => issue_id,
+                 "identifier" => String.upcase(issue_id),
+                 "title" => "Title #{issue_id}",
+                 "description" => "Description #{issue_id}",
+                 "priority" => 2,
+                 "state" => %{"name" => "Todo"},
+                 "branchName" => nil,
+                 "url" => nil,
+                 "assignee" => nil,
+                 "labels" => %{"nodes" => []},
+                 "inverseRelations" => %{"nodes" => []},
+                 "createdAt" => nil,
+                 "updatedAt" => nil
+               }
+             ],
+             "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+           }
+         }
+       }}
+    end
+
+    assert {:ok, [%Issue{id: "issue-a", pipeline_id: "pipeline-a"}]} =
+             Client.fetch_candidate_issues_for_test(pipeline_a, graphql_fun)
+
+    assert {:ok, [%Issue{id: "issue-b", pipeline_id: "pipeline-b"}]} =
+             Client.fetch_candidate_issues_for_test(pipeline_b, graphql_fun)
+
+    assert_received {:graphql_project_slug, "project-a"}
+    assert_received {:graphql_project_slug, "project-b"}
   end
 
   test "non-active issue state stops running agent without cleaning workspace" do
