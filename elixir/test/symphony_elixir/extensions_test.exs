@@ -10,9 +10,19 @@ defmodule SymphonyElixir.ExtensionsTest do
   @endpoint SymphonyElixirWeb.Endpoint
 
   defmodule FakeLinearClient do
+    def fetch_candidate_issues(%{id: pipeline_id, tracker: %{project_slug: project_slug}}) do
+      send(self(), {:fetch_candidate_issues_called, pipeline_id, project_slug})
+      {:ok, [{pipeline_id, project_slug}]}
+    end
+
     def fetch_candidate_issues do
       send(self(), :fetch_candidate_issues_called)
       {:ok, [:candidate]}
+    end
+
+    def fetch_issues_by_states(%{id: pipeline_id}, states) do
+      send(self(), {:fetch_issues_by_states_called, pipeline_id, states})
+      {:ok, states}
     end
 
     def fetch_issues_by_states(states) do
@@ -20,9 +30,27 @@ defmodule SymphonyElixir.ExtensionsTest do
       {:ok, states}
     end
 
+    def fetch_issue_states_by_ids(%{id: pipeline_id}, issue_ids) do
+      send(self(), {:fetch_issue_states_by_ids_called, pipeline_id, issue_ids})
+      {:ok, issue_ids}
+    end
+
     def fetch_issue_states_by_ids(issue_ids) do
       send(self(), {:fetch_issue_states_by_ids_called, issue_ids})
       {:ok, issue_ids}
+    end
+
+    def graphql(%{id: pipeline_id}, query, variables) do
+      send(self(), {:graphql_called, pipeline_id, query, variables})
+
+      case Process.get({__MODULE__, :graphql_results}) do
+        [result | rest] ->
+          Process.put({__MODULE__, :graphql_results}, rest)
+          result
+
+        _ ->
+          Process.get({__MODULE__, :graphql_result})
+      end
     end
 
     def graphql(query, variables) do
@@ -69,11 +97,44 @@ defmodule SymphonyElixir.ExtensionsTest do
     def init(opts), do: {:ok, opts}
 
     def handle_call(:snapshot, _from, state) do
-      {:reply, Keyword.fetch!(state, :snapshot), state}
+      snapshot =
+        state
+        |> Keyword.fetch!(:snapshot)
+        |> Map.put(:paused, Keyword.get(state, :paused, false))
+
+      {:reply, snapshot, state}
     end
 
     def handle_call(:request_refresh, _from, state) do
       {:reply, Keyword.get(state, :refresh, :unavailable), state}
+    end
+
+    def handle_call(:pause, _from, state) do
+      paused? = Keyword.get(state, :paused, false)
+      updated_state = Keyword.put(state, :paused, true)
+
+      reply = %{
+        paused: true,
+        changed: not paused?,
+        requested_at: DateTime.utc_now(),
+        operations: ["pause"]
+      }
+
+      {:reply, reply, updated_state}
+    end
+
+    def handle_call(:resume, _from, state) do
+      paused? = Keyword.get(state, :paused, false)
+      updated_state = Keyword.put(state, :paused, false)
+
+      reply = %{
+        paused: false,
+        changed: paused?,
+        requested_at: DateTime.utc_now(),
+        operations: ["resume", "poll"]
+      }
+
+      {:reply, reply, updated_state}
     end
   end
 
@@ -101,84 +162,41 @@ defmodule SymphonyElixir.ExtensionsTest do
     :ok
   end
 
-  test "workflow store reloads changes, keeps last good workflow, and falls back when stopped" do
-    ensure_workflow_store_running()
+  test "workflow.current reads the configured pipeline workflow file" do
     assert {:ok, %{prompt: "You are an agent for this repository."}} = Workflow.current()
 
     write_workflow_file!(Workflow.workflow_file_path(), prompt: "Second prompt")
-    send(WorkflowStore, :poll)
-
-    assert_eventually(fn ->
-      match?({:ok, %{prompt: "Second prompt"}}, Workflow.current())
-    end)
-
-    File.write!(Workflow.workflow_file_path(), "---\ntracker: [\n---\nBroken prompt\n")
-    assert {:error, _reason} = WorkflowStore.force_reload()
     assert {:ok, %{prompt: "Second prompt"}} = Workflow.current()
 
     third_workflow = Path.join(Path.dirname(Workflow.workflow_file_path()), "THIRD_WORKFLOW.md")
     write_workflow_file!(third_workflow, prompt: "Third prompt")
     Workflow.set_workflow_file_path(third_workflow)
-    assert {:ok, %{prompt: "Third prompt"}} = Workflow.current()
 
-    assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, WorkflowStore)
-    assert {:ok, %{prompt: "Third prompt"}} = WorkflowStore.current()
-    assert :ok = WorkflowStore.force_reload()
-    assert {:ok, _pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, WorkflowStore)
+    assert {:ok, %{prompt: "Third prompt"}} = Workflow.current()
   end
 
-  test "workflow store init stops on missing workflow file" do
+  test "workflow.current surfaces missing workflow files" do
     missing_path = Path.join(Path.dirname(Workflow.workflow_file_path()), "MISSING_WORKFLOW.md")
     Workflow.set_workflow_file_path(missing_path)
 
-    assert {:stop, {:missing_workflow_file, ^missing_path, :enoent}} = WorkflowStore.init([])
+    assert {:error, {:missing_workflow_file, ^missing_path, :enoent}} = Workflow.current()
   end
 
-  test "workflow store start_link and poll callback cover missing-file error paths" do
-    ensure_workflow_store_running()
-    existing_path = Workflow.workflow_file_path()
-    manual_path = Path.join(Path.dirname(existing_path), "MANUAL_WORKFLOW.md")
-    missing_path = Path.join(Path.dirname(existing_path), "MANUAL_MISSING_WORKFLOW.md")
+  test "workflow parser preserves utf-8 prompt text for config panel serialization" do
+    chinese_prompt = """
+    你正在处理 Linear 工单 `{{ issue.identifier }}`
 
-    assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, WorkflowStore)
+    执行要求：
+    - 只汇报已完成动作
+    - 不要包含“给用户的下一步”
+    """
 
-    Workflow.set_workflow_file_path(missing_path)
+    write_workflow_file!(Workflow.workflow_file_path(), prompt: chinese_prompt)
 
-    assert {:error, {:missing_workflow_file, ^missing_path, :enoent}} =
-             WorkflowStore.force_reload()
-
-    write_workflow_file!(manual_path, prompt: "Manual workflow prompt")
-    Workflow.set_workflow_file_path(manual_path)
-
-    assert {:ok, manual_pid} = WorkflowStore.start_link()
-    assert Process.alive?(manual_pid)
-
-    state = :sys.get_state(manual_pid)
-    File.write!(manual_path, "---\ntracker: [\n---\nBroken prompt\n")
-    assert {:noreply, returned_state} = WorkflowStore.handle_info(:poll, state)
-    assert returned_state.workflow.prompt == "Manual workflow prompt"
-    refute returned_state.stamp == nil
-    assert_receive :poll, 1_100
-
-    Workflow.set_workflow_file_path(missing_path)
-    assert {:noreply, path_error_state} = WorkflowStore.handle_info(:poll, returned_state)
-    assert path_error_state.workflow.prompt == "Manual workflow prompt"
-    assert_receive :poll, 1_100
-
-    Workflow.set_workflow_file_path(manual_path)
-    File.rm!(manual_path)
-    assert {:noreply, removed_state} = WorkflowStore.handle_info(:poll, path_error_state)
-    assert removed_state.workflow.prompt == "Manual workflow prompt"
-    assert_receive :poll, 1_100
-
-    Process.exit(manual_pid, :normal)
-    restart_result = Supervisor.restart_child(SymphonyElixir.Supervisor, WorkflowStore)
-
-    assert match?({:ok, _pid}, restart_result) or
-             match?({:error, {:already_started, _pid}}, restart_result)
-
-    Workflow.set_workflow_file_path(existing_path)
-    WorkflowStore.force_reload()
+    assert {:ok, workflow} = Workflow.load(Workflow.workflow_file_path())
+    assert String.valid?(workflow.prompt)
+    assert String.valid?(workflow.prompt_template)
+    assert {:ok, _json} = Jason.encode(workflow.prompt_template)
   end
 
   test "tracker delegates to memory and linear adapters" do
@@ -187,13 +205,20 @@ defmodule SymphonyElixir.ExtensionsTest do
     Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
 
+    memory_pipeline = pipeline_fixture("memory-pipeline", "memory", nil)
+
     assert Config.settings!().tracker.kind == "memory"
-    assert SymphonyElixir.Tracker.adapter() == Memory
-    assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_candidate_issues()
-    assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issues_by_states([" in progress ", 42])
-    assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issue_states_by_ids(["issue-1"])
-    assert :ok = SymphonyElixir.Tracker.create_comment("issue-1", "comment")
-    assert :ok = SymphonyElixir.Tracker.update_issue_state("issue-1", "Done")
+    assert SymphonyElixir.Tracker.adapter(memory_pipeline) == Memory
+    assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_candidate_issues(memory_pipeline)
+
+    assert {:ok, [^issue]} =
+             SymphonyElixir.Tracker.fetch_issues_by_states(memory_pipeline, [" in progress ", 42])
+
+    assert {:ok, [^issue]} =
+             SymphonyElixir.Tracker.fetch_issue_states_by_ids(memory_pipeline, ["issue-1"])
+
+    assert :ok = SymphonyElixir.Tracker.create_comment(memory_pipeline, "issue-1", "comment")
+    assert :ok = SymphonyElixir.Tracker.update_issue_state(memory_pipeline, "issue-1", "Done")
     assert_receive {:memory_tracker_comment, "issue-1", "comment"}
     assert_receive {:memory_tracker_state_update, "issue-1", "Done"}
 
@@ -201,29 +226,32 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert :ok = Memory.create_comment("issue-1", "quiet")
     assert :ok = Memory.update_issue_state("issue-1", "Quiet")
 
-    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
-    assert SymphonyElixir.Tracker.adapter() == Adapter
+    linear_pipeline = pipeline_fixture("linear-pipeline", "linear", "linear-project")
+    assert SymphonyElixir.Tracker.adapter(linear_pipeline) == Adapter
   end
 
   test "linear adapter delegates reads and validates mutation responses" do
     Application.put_env(:symphony_elixir, :linear_client_module, FakeLinearClient)
+    pipeline = pipeline_fixture("pipeline-a", "linear", "project-a")
 
-    assert {:ok, [:candidate]} = Adapter.fetch_candidate_issues()
-    assert_receive :fetch_candidate_issues_called
+    assert {:ok, [{"pipeline-a", "project-a"}]} = Adapter.fetch_candidate_issues(pipeline)
+    assert_receive {:fetch_candidate_issues_called, "pipeline-a", "project-a"}
 
-    assert {:ok, ["Todo"]} = Adapter.fetch_issues_by_states(["Todo"])
-    assert_receive {:fetch_issues_by_states_called, ["Todo"]}
+    assert {:ok, ["Todo"]} = Adapter.fetch_issues_by_states(pipeline, ["Todo"])
+    assert_receive {:fetch_issues_by_states_called, "pipeline-a", ["Todo"]}
 
-    assert {:ok, ["issue-1"]} = Adapter.fetch_issue_states_by_ids(["issue-1"])
-    assert_receive {:fetch_issue_states_by_ids_called, ["issue-1"]}
+    assert {:ok, ["issue-1"]} = Adapter.fetch_issue_states_by_ids(pipeline, ["issue-1"])
+    assert_receive {:fetch_issue_states_by_ids_called, "pipeline-a", ["issue-1"]}
 
     Process.put(
       {FakeLinearClient, :graphql_result},
       {:ok, %{"data" => %{"commentCreate" => %{"success" => true}}}}
     )
 
-    assert :ok = Adapter.create_comment("issue-1", "hello")
-    assert_receive {:graphql_called, create_comment_query, %{body: "hello", issueId: "issue-1"}}
+    assert :ok = Adapter.create_comment(pipeline, "issue-1", "hello")
+
+    assert_receive {:graphql_called, "pipeline-a", create_comment_query, %{body: "hello", issueId: "issue-1"}}
+
     assert create_comment_query =~ "commentCreate"
 
     Process.put(
@@ -232,17 +260,17 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     assert {:error, :comment_create_failed} =
-             Adapter.create_comment("issue-1", "broken")
+             Adapter.create_comment(pipeline, "issue-1", "broken")
 
     Process.put({FakeLinearClient, :graphql_result}, {:error, :boom})
 
-    assert {:error, :boom} = Adapter.create_comment("issue-1", "boom")
+    assert {:error, :boom} = Adapter.create_comment(pipeline, "issue-1", "boom")
 
     Process.put({FakeLinearClient, :graphql_result}, {:ok, %{"data" => %{}}})
-    assert {:error, :comment_create_failed} = Adapter.create_comment("issue-1", "weird")
+    assert {:error, :comment_create_failed} = Adapter.create_comment(pipeline, "issue-1", "weird")
 
     Process.put({FakeLinearClient, :graphql_result}, :unexpected)
-    assert {:error, :comment_create_failed} = Adapter.create_comment("issue-1", "odd")
+    assert {:error, :comment_create_failed} = Adapter.create_comment(pipeline, "issue-1", "odd")
 
     Process.put(
       {FakeLinearClient, :graphql_results},
@@ -257,11 +285,13 @@ defmodule SymphonyElixir.ExtensionsTest do
       ]
     )
 
-    assert :ok = Adapter.update_issue_state("issue-1", "Done")
-    assert_receive {:graphql_called, state_lookup_query, %{issueId: "issue-1", stateName: "Done"}}
+    assert :ok = Adapter.update_issue_state(pipeline, "issue-1", "Done")
+
+    assert_receive {:graphql_called, "pipeline-a", state_lookup_query, %{issueId: "issue-1", stateName: "Done"}}
+
     assert state_lookup_query =~ "states"
 
-    assert_receive {:graphql_called, update_issue_query, %{issueId: "issue-1", stateId: "state-1"}}
+    assert_receive {:graphql_called, "pipeline-a", update_issue_query, %{issueId: "issue-1", stateId: "state-1"}}
 
     assert update_issue_query =~ "issueUpdate"
 
@@ -279,14 +309,14 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     assert {:error, :issue_update_failed} =
-             Adapter.update_issue_state("issue-1", "Broken")
+             Adapter.update_issue_state(pipeline, "issue-1", "Broken")
 
     Process.put({FakeLinearClient, :graphql_results}, [{:error, :boom}])
 
-    assert {:error, :boom} = Adapter.update_issue_state("issue-1", "Boom")
+    assert {:error, :boom} = Adapter.update_issue_state(pipeline, "issue-1", "Boom")
 
     Process.put({FakeLinearClient, :graphql_results}, [{:ok, %{"data" => %{}}}])
-    assert {:error, :state_not_found} = Adapter.update_issue_state("issue-1", "Missing")
+    assert {:error, :state_not_found} = Adapter.update_issue_state(pipeline, "issue-1", "Missing")
 
     Process.put(
       {FakeLinearClient, :graphql_results},
@@ -301,7 +331,8 @@ defmodule SymphonyElixir.ExtensionsTest do
       ]
     )
 
-    assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Weird")
+    assert {:error, :issue_update_failed} =
+             Adapter.update_issue_state(pipeline, "issue-1", "Weird")
 
     Process.put(
       {FakeLinearClient, :graphql_results},
@@ -316,12 +347,53 @@ defmodule SymphonyElixir.ExtensionsTest do
       ]
     )
 
-    assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Odd")
+    assert {:error, :issue_update_failed} = Adapter.update_issue_state(pipeline, "issue-1", "Odd")
+  end
+
+  test "tracker and adapter keep different project slugs isolated per pipeline" do
+    Application.put_env(:symphony_elixir, :linear_client_module, FakeLinearClient)
+
+    pipeline_a = pipeline_fixture("pipeline-a", "linear", "project-a")
+    pipeline_b = pipeline_fixture("pipeline-b", "linear", "project-b")
+
+    assert {:ok, [{"pipeline-a", "project-a"}]} =
+             SymphonyElixir.Tracker.fetch_candidate_issues(pipeline_a)
+
+    assert {:ok, [{"pipeline-b", "project-b"}]} =
+             SymphonyElixir.Tracker.fetch_candidate_issues(pipeline_b)
+
+    assert_receive {:fetch_candidate_issues_called, "pipeline-a", "project-a"}
+    assert_receive {:fetch_candidate_issues_called, "pipeline-b", "project-b"}
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do
     snapshot = static_snapshot()
     orchestrator_name = Module.concat(__MODULE__, :ObservabilityApiOrchestrator)
+
+    log_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-observability-logs-#{System.unique_integer([:positive])}"
+      )
+
+    log_path = Path.join(log_root, "log/symphony.log")
+
+    File.mkdir_p!(Path.dirname(log_path))
+    File.write!(log_path, "info booted\nwarn retrying issue\n")
+
+    previous_log_file = Application.get_env(:symphony_elixir, :log_file)
+
+    on_exit(fn ->
+      if is_nil(previous_log_file) do
+        Application.delete_env(:symphony_elixir, :log_file)
+      else
+        Application.put_env(:symphony_elixir, :log_file, previous_log_file)
+      end
+
+      File.rm_rf(log_root)
+    end)
+
+    Application.put_env(:symphony_elixir, :log_file, log_path)
 
     {:ok, _pid} =
       StaticOrchestrator.start_link(
@@ -376,7 +448,14 @@ defmodule SymphonyElixir.ExtensionsTest do
                "total_tokens" => 12,
                "seconds_running" => 42.5
              },
-             "rate_limits" => %{"primary" => %{"remaining" => 11}}
+             "rate_limits" => %{"primary" => %{"remaining" => 11}},
+             "logs" => %{
+               "path" => log_path,
+               "available" => true,
+               "source_paths" => [log_path],
+               "truncated" => false,
+               "lines" => ["info booted", "warn retrying issue"]
+             }
            }
 
     conn = get(build_conn(), "/api/v1/MT-HTTP")
@@ -477,6 +556,166 @@ defmodule SymphonyElixir.ExtensionsTest do
              }
   end
 
+  test "phoenix observability api exposes per-pipeline state and controls" do
+    alpha_orchestrator = Module.concat(__MODULE__, :AlphaPipelineOrchestrator)
+    beta_orchestrator = Module.concat(__MODULE__, :BetaPipelineOrchestrator)
+    alpha_pipeline = pipeline_fixture("alpha", "linear", "alpha-project")
+    beta_pipeline = pipeline_fixture("beta", "linear", "beta-project")
+
+    {:ok, _alpha_pid} =
+      StaticOrchestrator.start_link(
+        name: alpha_orchestrator,
+        snapshot: static_snapshot(),
+        refresh: %{
+          queued: true,
+          coalesced: false,
+          requested_at: DateTime.utc_now(),
+          operations: ["poll", "reconcile"]
+        },
+        paused: false
+      )
+
+    {:ok, _beta_pid} =
+      StaticOrchestrator.start_link(
+        name: beta_orchestrator,
+        snapshot: %{
+          running: [],
+          retrying: [],
+          codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+          rate_limits: nil,
+          polling: %{checking?: false, next_poll_in_ms: 15_000, poll_interval_ms: 15_000}
+        },
+        refresh: %{
+          queued: true,
+          coalesced: true,
+          requested_at: DateTime.utc_now(),
+          operations: ["poll"]
+        },
+        paused: true
+      )
+
+    start_test_endpoint(
+      pipelines: [alpha_pipeline, beta_pipeline],
+      pipeline_orchestrators: %{
+        "alpha" => alpha_orchestrator,
+        "beta" => beta_orchestrator
+      },
+      snapshot_timeout_ms: 50
+    )
+
+    pipelines_payload = json_response(get(build_conn(), "/api/v1/pipelines"), 200)
+
+    assert pipelines_payload == %{
+             "generated_at" => pipelines_payload["generated_at"],
+             "pipelines" => [
+               %{
+                 "id" => "alpha",
+                 "enabled" => true,
+                 "available" => true,
+                 "paused" => false,
+                 "running_agents" => 1,
+                 "retrying_agents" => 1,
+                 "project_slug" => "alpha-project",
+                 "project_url" => "https://linear.app/project/alpha-project/issues",
+                 "workflow_path" => nil,
+                 "polling" => %{
+                   "checking" => false,
+                   "next_poll_in_ms" => nil,
+                   "poll_interval_ms" => nil
+                 }
+               },
+               %{
+                 "id" => "beta",
+                 "enabled" => true,
+                 "available" => true,
+                 "paused" => true,
+                 "running_agents" => 0,
+                 "retrying_agents" => 0,
+                 "project_slug" => "beta-project",
+                 "project_url" => "https://linear.app/project/beta-project/issues",
+                 "workflow_path" => nil,
+                 "polling" => %{
+                   "checking" => false,
+                   "next_poll_in_ms" => 15_000,
+                   "poll_interval_ms" => 15_000
+                 }
+               }
+             ]
+           }
+
+    alpha_payload = json_response(get(build_conn(), "/api/v1/pipelines/alpha"), 200)
+
+    assert alpha_payload == %{
+             "generated_at" => alpha_payload["generated_at"],
+             "pipeline" => %{
+               "id" => "alpha",
+               "enabled" => true,
+               "available" => true,
+               "paused" => false,
+               "project_slug" => "alpha-project",
+               "project_url" => "https://linear.app/project/alpha-project/issues",
+               "workflow_path" => nil
+             },
+             "counts" => %{"running" => 1, "retrying" => 1},
+             "running" => [
+               %{
+                 "issue_id" => "issue-http",
+                 "issue_identifier" => "MT-HTTP",
+                 "state" => "In Progress",
+                 "session_id" => "thread-http",
+                 "turn_count" => 7,
+                 "last_event" => "notification",
+                 "last_message" => "rendered",
+                 "started_at" => alpha_payload["running"] |> List.first() |> Map.fetch!("started_at"),
+                 "last_event_at" => nil,
+                 "worker_host" => nil,
+                 "workspace_path" => nil,
+                 "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
+               }
+             ],
+             "retrying" => [
+               %{
+                 "issue_id" => "issue-retry",
+                 "issue_identifier" => "MT-RETRY",
+                 "attempt" => 2,
+                 "due_at" => alpha_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
+                 "error" => "boom",
+                 "worker_host" => nil,
+                 "workspace_path" => nil
+               }
+             ],
+             "codex_totals" => %{
+               "input_tokens" => 4,
+               "output_tokens" => 8,
+               "total_tokens" => 12,
+               "seconds_running" => 42.5
+             },
+             "rate_limits" => %{"primary" => %{"remaining" => 11}},
+             "polling" => %{
+               "checking" => false,
+               "next_poll_in_ms" => nil,
+               "poll_interval_ms" => nil
+             }
+           }
+
+    assert %{"id" => "alpha", "paused" => false, "operations" => ["poll", "reconcile"]} =
+             json_response(post(build_conn(), "/api/v1/pipelines/alpha/refresh", %{}), 202)
+
+    assert %{"id" => "beta", "paused" => true, "operations" => ["pause"]} =
+             json_response(post(build_conn(), "/api/v1/pipelines/beta/pause", %{}), 202)
+
+    assert %{"id" => "beta", "paused" => false, "operations" => ["resume", "poll"]} =
+             json_response(post(build_conn(), "/api/v1/pipelines/beta/resume", %{}), 202)
+
+    resumed_payload = json_response(get(build_conn(), "/api/v1/pipelines/beta"), 200)
+    assert resumed_payload["pipeline"]["paused"] == false
+
+    assert json_response(get(build_conn(), "/api/v1/pipelines/missing"), 404) ==
+             %{
+               "error" => %{"code" => "pipeline_not_found", "message" => "Pipeline not found"}
+             }
+  end
+
   test "dashboard bootstraps liveview from embedded static assets" do
     orchestrator_name = Module.concat(__MODULE__, :AssetOrchestrator)
 
@@ -524,6 +763,31 @@ defmodule SymphonyElixir.ExtensionsTest do
     orchestrator_name = Module.concat(__MODULE__, :DashboardOrchestrator)
     snapshot = static_snapshot()
 
+    log_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-dashboard-logs-#{System.unique_integer([:positive])}"
+      )
+
+    log_path = Path.join(log_root, "log/symphony.log")
+
+    File.mkdir_p!(Path.dirname(log_path))
+    File.write!(log_path, "info dashboard ready\nwarn no active agents\n")
+
+    previous_log_file = Application.get_env(:symphony_elixir, :log_file)
+
+    on_exit(fn ->
+      if is_nil(previous_log_file) do
+        Application.delete_env(:symphony_elixir, :log_file)
+      else
+        Application.put_env(:symphony_elixir, :log_file, previous_log_file)
+      end
+
+      File.rm_rf(log_root)
+    end)
+
+    Application.put_env(:symphony_elixir, :log_file, log_path)
+
     {:ok, orchestrator_pid} =
       StaticOrchestrator.start_link(
         name: orchestrator_name,
@@ -539,15 +803,18 @@ defmodule SymphonyElixir.ExtensionsTest do
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
     {:ok, view, html} = live(build_conn(), "/")
-    assert html =~ "Operations Dashboard"
+    assert html =~ "编排席"
     assert html =~ "MT-HTTP"
     assert html =~ "MT-RETRY"
     assert html =~ "rendered"
-    assert html =~ "Runtime"
-    assert html =~ "Live"
-    assert html =~ "Offline"
-    assert html =~ "Copy ID"
-    assert html =~ "Codex update"
+    assert html =~ "累计用时"
+    assert html =~ "在线"
+    assert html =~ "离线"
+    assert html =~ "日志区"
+    assert html =~ "复制会话 ID"
+    assert html =~ "最新动态"
+    assert html =~ "配额视窗"
+    assert html =~ "在途会话"
     refute html =~ "data-runtime-clock="
     refute html =~ "setInterval(refreshRuntimeClocks"
     refute html =~ "Refresh now"
@@ -592,8 +859,519 @@ defmodule SymphonyElixir.ExtensionsTest do
     StatusDashboard.notify_update()
 
     assert_eventually(fn ->
-      render(view) =~ "agent message content streaming: structured update"
+      render(view) =~ "Agent 内容流：structured update"
     end)
+  end
+
+  test "dashboard liveview renders a multi-pipeline host summary" do
+    alpha_orchestrator = Module.concat(__MODULE__, :DashboardAlphaOrchestrator)
+    beta_orchestrator = Module.concat(__MODULE__, :DashboardBetaOrchestrator)
+    alpha_pipeline = pipeline_fixture("alpha", "linear", "alpha-project")
+    beta_pipeline = pipeline_fixture("beta", "linear", "beta-project")
+
+    {:ok, _alpha_pid} =
+      StaticOrchestrator.start_link(
+        name: alpha_orchestrator,
+        snapshot: static_snapshot(),
+        refresh: %{
+          queued: true,
+          coalesced: false,
+          requested_at: DateTime.utc_now(),
+          operations: ["poll"]
+        },
+        paused: false
+      )
+
+    {:ok, _beta_pid} =
+      StaticOrchestrator.start_link(
+        name: beta_orchestrator,
+        snapshot: %{
+          running: [],
+          retrying: [
+            %{
+              issue_id: "issue-beta-retry",
+              identifier: "MT-BETA",
+              attempt: 1,
+              due_in_ms: 5_000,
+              error: "paused upstream"
+            }
+          ],
+          codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+          rate_limits: nil,
+          polling: %{checking?: false, next_poll_in_ms: nil, poll_interval_ms: 15_000}
+        },
+        refresh: %{
+          queued: false,
+          coalesced: true,
+          requested_at: DateTime.utc_now(),
+          operations: []
+        },
+        paused: true
+      )
+
+    start_test_endpoint(
+      pipelines: [alpha_pipeline, beta_pipeline],
+      pipeline_orchestrators: %{
+        "alpha" => alpha_orchestrator,
+        "beta" => beta_orchestrator
+      },
+      snapshot_timeout_ms: 50
+    )
+
+    {:ok, _view, html} = live(build_conn(), "/")
+
+    assert html =~ "托管管线"
+    assert html =~ "alpha"
+    assert html =~ "beta"
+    assert html =~ "运行中"
+    assert html =~ "暂停中"
+    assert html =~ "alpha-project"
+    assert html =~ "beta-project"
+    assert html =~ "pipelines"
+  end
+
+  test "dashboard liveview renders camelCase rate limits and wrapped log sources" do
+    orchestrator_name = Module.concat(__MODULE__, :DashboardCamelCaseRateLimitOrchestrator)
+
+    snapshot =
+      static_snapshot()
+      |> Map.put(:rate_limits, %{
+        "planType" => "priority",
+        "primary" => %{
+          "usedPercent" => 52,
+          "windowDurationMins" => 300,
+          "resetsAt" => 1
+        },
+        "secondary" => %{
+          "usedPercent" => 66,
+          "windowDurationMins" => 10_080,
+          "resetsAt" => 2
+        }
+      })
+
+    log_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-dashboard-wrap-logs-#{System.unique_integer([:positive])}"
+      )
+
+    log_path = Path.join(log_root, "log/symphony.log")
+    wrapped_log_path = log_path <> ".1"
+    File.mkdir_p!(Path.dirname(log_path))
+    File.write!(wrapped_log_path, "wrap-dashboard-1\nwrap-dashboard-2\n")
+
+    previous_log_file = Application.get_env(:symphony_elixir, :log_file)
+
+    on_exit(fn ->
+      if is_nil(previous_log_file) do
+        Application.delete_env(:symphony_elixir, :log_file)
+      else
+        Application.put_env(:symphony_elixir, :log_file, previous_log_file)
+      end
+
+      File.rm_rf(log_root)
+    end)
+
+    Application.put_env(:symphony_elixir, :log_file, log_path)
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _logs_view, logs_html} = live(build_conn(), "/panel/logs")
+    assert logs_html =~ log_path
+    assert logs_html =~ wrapped_log_path
+    assert logs_html =~ "wrap-dashboard-1"
+    assert logs_html =~ "wrap-dashboard-2"
+
+    {:ok, _home_view, home_html} = live(build_conn(), "/")
+    assert home_html =~ "priority"
+    assert home_html =~ "52%"
+    assert home_html =~ "5小时窗口"
+    assert home_html =~ "重置 1970-01-01 00:00:01Z"
+    assert home_html =~ "66%"
+    assert home_html =~ "7天窗口"
+    assert home_html =~ "重置 1970-01-01 00:00:02Z"
+  end
+
+  test "dashboard exposes a config panel that edits and saves the default pipeline" do
+    orchestrator_name = Module.concat(__MODULE__, :WorkflowEditorOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    workflow_path = Workflow.workflow_file_path()
+
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "观测区"
+    assert html =~ "配置区"
+
+    {:ok, config_view, config_html} = live(build_conn(), "/panel/config")
+
+    assert config_html =~ "default"
+    assert config_html =~ workflow_path
+    assert config_html =~ "project_slug:"
+    assert config_html =~ "&quot;project&quot;"
+
+    updated_workflow =
+      workflow_path
+      |> render_pipeline_editor_body!()
+      |> String.replace("project_slug: \"project\"", "project_slug: \"updated-project\"")
+      |> String.replace("You are an agent for this repository.", "Updated workflow prompt")
+
+    saved_html =
+      config_view
+      |> form("#workflow-editor-form", workflow: %{body: updated_workflow})
+      |> render_submit()
+
+    assert saved_html =~ "已保存并重新加载当前 pipeline 配置。"
+    assert File.read!(workflow_path) =~ "Updated workflow prompt"
+    assert SymphonyElixir.Config.linear_project_slug() == "updated-project"
+  end
+
+  test "config panel switches and saves per-pipeline config under a multi-pipeline root" do
+    orchestrator_name = Module.concat(__MODULE__, :MultiPipelineWorkflowEditorOrchestrator)
+    snapshot = static_snapshot()
+
+    pipeline_root =
+      Path.join(System.tmp_dir!(), "symphony-pipelines-#{System.unique_integer([:positive])}")
+
+    original_pipeline_root_path = Application.get_env(:symphony_elixir, :pipeline_root_path)
+
+    on_exit(fn ->
+      if is_binary(original_pipeline_root_path) do
+        Workflow.set_pipeline_root_path(original_pipeline_root_path)
+      else
+        Workflow.clear_pipeline_root_path()
+      end
+
+      File.rm_rf(pipeline_root)
+    end)
+
+    alpha =
+      write_pipeline_fixture!(pipeline_root, "alpha", "alpha-project", "Alpha prompt template")
+
+    beta =
+      write_pipeline_fixture!(pipeline_root, "beta", "beta-project", "Beta prompt template")
+
+    Workflow.set_pipeline_root_path(pipeline_root)
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, view, html} = live(build_conn(), "/panel/config")
+
+    assert html =~ "Pipeline Config"
+    assert html =~ "托管管线"
+    assert html =~ alpha.pipeline_config_path
+    assert html =~ alpha.workflow_path
+    assert html =~ "alpha-project"
+    assert html =~ "beta-project"
+
+    switched_html =
+      view
+      |> element("#config-pipeline-beta")
+      |> render_click()
+
+    assert switched_html =~ beta.pipeline_config_path
+    assert switched_html =~ beta.workflow_path
+    assert switched_html =~ "beta-project"
+
+    updated_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "tracker_project_slug" => "beta-updated",
+          "prompt_template" => "Beta prompt updated"
+        }
+      )
+      |> render_change()
+
+    assert updated_html =~ "beta-updated"
+    assert updated_html =~ "Beta prompt updated"
+
+    saved_html =
+      view
+      |> form("#workflow-save-form")
+      |> render_submit()
+
+    assert saved_html =~ "已保存并重新加载当前 pipeline 配置。"
+
+    assert {:ok, beta_config} =
+             beta.pipeline_config_path
+             |> File.read!()
+             |> YamlElixir.read_from_string()
+
+    assert get_in(beta_config, ["tracker", "project_slug"]) == "beta-updated"
+    assert String.trim_trailing(File.read!(beta.workflow_path)) == "Beta prompt updated"
+
+    assert {:ok, alpha_config} =
+             alpha.pipeline_config_path
+             |> File.read!()
+             |> YamlElixir.read_from_string()
+
+    assert get_in(alpha_config, ["tracker", "project_slug"]) == "alpha-project"
+    assert String.trim_trailing(File.read!(alpha.workflow_path)) == "Alpha prompt template"
+  end
+
+  test "config panel scaffolds a new pipeline from the dashboard" do
+    orchestrator_name = Module.concat(__MODULE__, :PipelineScaffoldWorkflowEditorOrchestrator)
+    snapshot = static_snapshot()
+
+    pipeline_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-pipeline-scaffold-#{System.unique_integer([:positive])}"
+      )
+
+    original_pipeline_root_path = Application.get_env(:symphony_elixir, :pipeline_root_path)
+
+    on_exit(fn ->
+      if is_binary(original_pipeline_root_path) do
+        Workflow.set_pipeline_root_path(original_pipeline_root_path)
+      else
+        Workflow.clear_pipeline_root_path()
+      end
+
+      File.rm_rf(pipeline_root)
+    end)
+
+    alpha =
+      write_pipeline_fixture!(pipeline_root, "alpha", "alpha-project", "Alpha prompt template")
+
+    beta_pipeline_dir = Path.join(pipeline_root, "beta")
+    beta_pipeline_config_path = Path.join(beta_pipeline_dir, "pipeline.yaml")
+    beta_workflow_path = Path.join(beta_pipeline_dir, "WORKFLOW.md")
+
+    Workflow.set_pipeline_root_path(pipeline_root)
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, view, html} = live(build_conn(), "/panel/config")
+
+    assert html =~ "+ New Pipeline"
+    refute html =~ "Create Pipeline"
+
+    opened_html =
+      view
+      |> element("#open-new-pipeline")
+      |> render_click()
+
+    assert opened_html =~ "Create Pipeline"
+    assert opened_html =~ "先创建最小可运行配置，后续再补高级项。"
+
+    created_html =
+      view
+      |> form("#pipeline-create-form",
+        new_pipeline: %{
+          "id" => "beta",
+          "tracker_project_slug" => "beta-project",
+          "prompt_template" => "Beta prompt template",
+          "enabled" => "true"
+        }
+      )
+      |> render_submit()
+
+    assert created_html =~ "已创建并装载新的 pipeline。"
+    assert created_html =~ beta_pipeline_config_path
+    assert created_html =~ beta_workflow_path
+    assert created_html =~ "beta-project"
+
+    assert {:ok, beta_config} =
+             beta_pipeline_config_path
+             |> File.read!()
+             |> YamlElixir.read_from_string()
+
+    assert beta_config["id"] == "beta"
+    assert beta_config["enabled"] == true
+    assert get_in(beta_config, ["tracker", "project_slug"]) == "beta-project"
+    assert String.trim_trailing(File.read!(beta_workflow_path)) == "Beta prompt template"
+
+    assert {:ok, alpha_config} =
+             alpha.pipeline_config_path
+             |> File.read!()
+             |> YamlElixir.read_from_string()
+
+    assert alpha_config["id"] == "alpha"
+    assert get_in(alpha_config, ["tracker", "project_slug"]) == "alpha-project"
+  end
+
+  test "config panel exposes save confirmation metadata and keyboard shortcut hook" do
+    orchestrator_name = Module.concat(__MODULE__, :WorkflowEditorHooksOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/panel/config")
+
+    assert html =~ "phx-hook=\"WorkflowEditor\""
+    assert html =~ "data-save-shortcut=\"meta+s,ctrl+s\""
+    assert html =~ "data-confirm-message="
+    assert html =~ "即将保存 pipeline `default`。"
+    assert html =~ "当前草稿和已装载配置一致。"
+    assert html =~ "结构化"
+    assert html =~ "YAML"
+    assert html =~ "config-tab config-tab-active"
+    assert html =~ "保存当前 pipeline"
+    assert html =~ "id=\"workflow-save-form\""
+    refute html =~ "Memory"
+    assert html =~ "决定 Symphony 去哪里拉任务"
+    assert html =~ "优先使用这里的值；留空则回退到环境变量"
+    assert html =~ "控制 orchestrator 轮询节奏"
+    assert html =~ "决定每次会话如何启动 Codex"
+    assert html =~ "这是发给每个任务 agent 的核心执行说明"
+  end
+
+  test "config panel offers structured controls that update the markdown draft" do
+    orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowEditorOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, view, _html} = live(build_conn(), "/panel/config")
+
+    updated_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "tracker_project_slug" => "designer-project",
+          "workspace_root" => "/tmp/designer-workspaces",
+          "prompt_template" => "Structured prompt body"
+        }
+      )
+      |> render_change()
+
+    assert updated_html =~ "designer-project"
+    assert updated_html =~ "/tmp/designer-workspaces"
+    assert updated_html =~ "Structured prompt body"
+  end
+
+  test "config panel saves the latest structured draft even if the textarea posts stale content" do
+    orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowSaveOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    workflow_path = Workflow.workflow_file_path()
+    original_workflow = File.read!(workflow_path)
+
+    {:ok, view, _html} = live(build_conn(), "/panel/config")
+
+    updated_draft_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "tracker_project_slug" => "structured-save-project"
+        }
+      )
+      |> render_change()
+
+    assert updated_draft_html =~ "structured-save-project"
+
+    saved_html =
+      view
+      |> form("#workflow-editor-form", workflow: %{body: original_workflow})
+      |> render_submit()
+
+    assert saved_html =~ "已保存并重新加载当前 pipeline 配置。"
+
+    assert File.read!(Path.join(Path.dirname(workflow_path), "pipeline.yaml")) =~
+             "structured-save-project"
+
+    assert SymphonyElixir.Config.linear_project_slug() == "structured-save-project"
+  end
+
+  test "config panel rejects tracker.kind memory in yaml mode" do
+    orchestrator_name = Module.concat(__MODULE__, :MemoryTrackerKindRejectedOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    workflow_path = Workflow.workflow_file_path()
+    pipeline_config_path = Path.join(Path.dirname(workflow_path), "pipeline.yaml")
+    original_workflow = render_pipeline_editor_body!(workflow_path)
+    invalid_workflow = String.replace(original_workflow, "kind: \"linear\"", "kind: \"memory\"")
+
+    {:ok, view, _html} = live(build_conn(), "/panel/config")
+
+    saved_html =
+      view
+      |> form("#workflow-editor-form", workflow: %{body: invalid_workflow})
+      |> render_submit()
+
+    assert saved_html =~ "配置区不支持 `tracker.kind: memory`，请改为 `linear`。"
+    refute File.read!(pipeline_config_path) =~ "kind: \"memory\""
+  end
+
+  test "config panel exposes hooks controls and persists structured hook edits" do
+    orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowHooksOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    workflow_path = Workflow.workflow_file_path()
+    pipeline_config_path = Path.join(Path.dirname(workflow_path), "pipeline.yaml")
+    original_workflow = File.read!(workflow_path)
+
+    {:ok, view, html} = live(build_conn(), "/panel/config")
+
+    assert html =~ "Hooks"
+    assert html =~ "after create"
+    assert html =~ "before remove"
+    assert html =~ "创建 workspace 后立刻执行"
+    assert html =~ "限制单个 hook 最长运行时间"
+
+    updated_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "hooks_after_create" => "git clone https://example.com/repo .\npnpm install\n",
+          "hooks_before_run" => "pnpm lint\n",
+          "hooks_after_run" => "pnpm test\n",
+          "hooks_before_remove" => "echo cleanup\n",
+          "hooks_timeout_ms" => "900000"
+        }
+      )
+      |> render_change()
+
+    assert updated_html =~ "git clone https://example.com/repo ."
+    assert updated_html =~ "pnpm lint"
+    assert updated_html =~ "pnpm test"
+    assert updated_html =~ "echo cleanup"
+    assert updated_html =~ "900000"
+
+    saved_html =
+      view
+      |> form("#workflow-editor-form", workflow: %{body: original_workflow})
+      |> render_submit()
+
+    saved_config = File.read!(pipeline_config_path)
+
+    assert saved_html =~ "已保存并重新加载当前 pipeline 配置。"
+    assert saved_config =~ "after_create:"
+    assert saved_config =~ "git clone https://example.com/repo ."
+    assert saved_config =~ "before_run:"
+    assert saved_config =~ "pnpm lint"
+    assert saved_config =~ "after_run:"
+    assert saved_config =~ "pnpm test"
+    assert saved_config =~ "before_remove:"
+    assert saved_config =~ "echo cleanup"
+    assert saved_config =~ "timeout_ms: 900000"
   end
 
   test "dashboard liveview renders an unavailable state without crashing" do
@@ -603,8 +1381,43 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     {:ok, _view, html} = live(build_conn(), "/")
-    assert html =~ "Snapshot unavailable"
+    assert html =~ "快照暂不可用"
     assert html =~ "snapshot_unavailable"
+  end
+
+  test "logs panel renders from left nav even when the log file is empty" do
+    orchestrator_name = Module.concat(__MODULE__, :LogsPanelOrchestrator)
+    snapshot = static_snapshot()
+
+    log_root =
+      Path.join(System.tmp_dir!(), "symphony-logs-panel-#{System.unique_integer([:positive])}")
+
+    log_path = Path.join(log_root, "log/symphony.log")
+
+    previous_log_file = Application.get_env(:symphony_elixir, :log_file)
+
+    on_exit(fn ->
+      if is_nil(previous_log_file) do
+        Application.delete_env(:symphony_elixir, :log_file)
+      else
+        Application.put_env(:symphony_elixir, :log_file, previous_log_file)
+      end
+
+      File.rm_rf(log_root)
+    end)
+
+    Application.put_env(:symphony_elixir, :log_file, log_path)
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/panel/logs")
+
+    assert html =~ "日志区"
+    assert html =~ log_path
+    assert html =~ "当前日志文件还没有可展示内容。"
+    assert html =~ "control-nav-link control-nav-link-active"
   end
 
   test "http server serves embedded assets, accepts form posts, and rejects invalid hosts" do
@@ -737,14 +1550,109 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   defp assert_eventually(_fun, 0), do: flunk("condition not met in time")
 
-  defp ensure_workflow_store_running do
-    if Process.whereis(WorkflowStore) do
-      :ok
-    else
-      case Supervisor.restart_child(SymphonyElixir.Supervisor, WorkflowStore) do
-        {:ok, _pid} -> :ok
-        {:error, {:already_started, _pid}} -> :ok
-      end
+  defp render_pipeline_editor_body!(workflow_path) do
+    pipeline_config_path = Path.join(Path.dirname(workflow_path), "pipeline.yaml")
+
+    {:ok, pipeline_config} =
+      pipeline_config_path
+      |> File.read!()
+      |> YamlElixir.read_from_string()
+
+    Workflow.render_content(pipeline_config, String.trim_trailing(File.read!(workflow_path)))
+  end
+
+  defp pipeline_fixture(id, kind, project_slug) do
+    tracker =
+      %{
+        "kind" => kind
+      }
+      |> maybe_put("api_key", "token")
+      |> maybe_put("project_slug", project_slug)
+
+    assert {:ok, pipeline} =
+             SymphonyElixir.Pipeline.parse(%{
+               "id" => id,
+               "tracker" => tracker
+             })
+
+    pipeline
+  end
+
+  defp write_pipeline_fixture!(pipeline_root, id, project_slug, prompt_template) do
+    pipeline_dir = Path.join(pipeline_root, id)
+    pipeline_config_path = Path.join(pipeline_dir, "pipeline.yaml")
+    workflow_path = Path.join(pipeline_dir, "WORKFLOW.md")
+
+    config = %{
+      "id" => id,
+      "enabled" => true,
+      "tracker" => %{
+        "kind" => "linear",
+        "api_key" => "token",
+        "endpoint" => "https://api.linear.app/graphql",
+        "project_slug" => project_slug,
+        "active_states" => ["Todo", "In Progress"],
+        "terminal_states" => ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+      },
+      "polling" => %{"interval_ms" => 30_000},
+      "workspace" => %{"root" => Path.join(System.tmp_dir!(), "symphony-workspaces-#{id}")},
+      "agent" => %{
+        "max_concurrent_agents" => 10,
+        "max_turns" => 20,
+        "max_retry_backoff_ms" => 300_000
+      },
+      "codex" => %{
+        "command" => "codex app-server",
+        "approval_policy" => %{
+          "reject" => %{
+            "sandbox_approval" => true,
+            "rules" => true,
+            "mcp_elicitations" => true
+          }
+        },
+        "thread_sandbox" => "workspace-write",
+        "turn_timeout_ms" => 3_600_000,
+        "read_timeout_ms" => 5_000,
+        "stall_timeout_ms" => 300_000
+      },
+      "hooks" => %{"timeout_ms" => 60_000},
+      "observability" => %{
+        "dashboard_enabled" => true,
+        "refresh_ms" => 1_000,
+        "render_interval_ms" => 16
+      },
+      "server" => %{}
+    }
+
+    rendered_body = Workflow.render_content(config, prompt_template)
+
+    File.mkdir_p!(pipeline_dir)
+    File.write!(pipeline_config_path, extract_front_matter_yaml(rendered_body))
+    File.write!(workflow_path, prompt_template <> "\n")
+
+    %{
+      pipeline_dir: pipeline_dir,
+      pipeline_config_path: pipeline_config_path,
+      workflow_path: workflow_path,
+      rendered_body: rendered_body
+    }
+  end
+
+  defp extract_front_matter_yaml(rendered_body) when is_binary(rendered_body) do
+    case String.split(rendered_body, ~r/\R/u, trim: false) do
+      ["---" | rest] ->
+        rest
+        |> Enum.split_while(&(&1 != "---"))
+        |> elem(0)
+        |> Enum.join("\n")
+        |> String.trim_trailing()
+        |> Kernel.<>("\n")
+
+      _ ->
+        ""
     end
   end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 end

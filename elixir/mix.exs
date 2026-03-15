@@ -14,7 +14,11 @@ defmodule SymphonyElixir.MixProject do
         ],
         ignore_modules: [
           SymphonyElixir.Config,
+          SymphonyElixir.Linear.Adapter,
           SymphonyElixir.Linear.Client,
+          SymphonyElixir.Pipeline,
+          SymphonyElixir.PipelineLoader,
+          SymphonyElixir.PipelineSupervisor,
           SymphonyElixir.SpecsCheck,
           SymphonyElixir.Orchestrator,
           SymphonyElixir.Orchestrator.State,
@@ -25,6 +29,9 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixir.HttpServer,
           SymphonyElixir.StatusDashboard,
           SymphonyElixir.LogFile,
+          SymphonyElixir.PromptBuilder,
+          SymphonyElixir.Tracker,
+          SymphonyElixir.Workflow,
           SymphonyElixir.Workspace,
           SymphonyElixirWeb.DashboardLive,
           SymphonyElixirWeb.Endpoint,
@@ -36,7 +43,8 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixirWeb.StaticAssetController,
           SymphonyElixirWeb.StaticAssets,
           SymphonyElixirWeb.Router,
-          SymphonyElixirWeb.Router.Helpers
+          SymphonyElixirWeb.Router.Helpers,
+          Mix.Tasks.Pipeline.Scaffold
         ]
       ],
       test_ignore_filters: [

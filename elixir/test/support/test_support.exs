@@ -18,32 +18,38 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.StatusDashboard
       alias SymphonyElixir.Tracker
       alias SymphonyElixir.Workflow
-      alias SymphonyElixir.WorkflowStore
       alias SymphonyElixir.Workspace
 
       import SymphonyElixir.TestSupport,
-        only: [write_workflow_file!: 1, write_workflow_file!: 2, restore_env: 2, stop_default_http_server: 0]
+        only: [
+          write_workflow_file!: 1,
+          write_workflow_file!: 2,
+          restore_env: 2,
+          stop_default_http_server: 0
+        ]
 
       setup do
-        workflow_root =
+        pipeline_root =
           Path.join(
             System.tmp_dir!(),
-            "symphony-elixir-workflow-#{System.unique_integer([:positive])}"
+            "symphony-elixir-pipelines-#{System.unique_integer([:positive])}"
           )
 
-        File.mkdir_p!(workflow_root)
-        workflow_file = Path.join(workflow_root, "WORKFLOW.md")
+        pipeline_dir = Path.join(pipeline_root, "default")
+        File.mkdir_p!(pipeline_dir)
+        workflow_file = Path.join(pipeline_dir, "WORKFLOW.md")
         write_workflow_file!(workflow_file)
+        Workflow.set_pipeline_root_path(pipeline_root)
         Workflow.set_workflow_file_path(workflow_file)
-        if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
         stop_default_http_server()
 
         on_exit(fn ->
+          Application.delete_env(:symphony_elixir, :pipeline_root_path)
           Application.delete_env(:symphony_elixir, :workflow_file_path)
           Application.delete_env(:symphony_elixir, :server_port_override)
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
           Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
-          File.rm_rf(workflow_root)
+          File.rm_rf(pipeline_root)
         end)
 
         :ok
@@ -52,16 +58,9 @@ defmodule SymphonyElixir.TestSupport do
   end
 
   def write_workflow_file!(path, overrides \\ []) do
-    workflow = workflow_content(overrides)
-    File.write!(path, workflow)
-
-    if Process.whereis(SymphonyElixir.WorkflowStore) do
-      try do
-        SymphonyElixir.WorkflowStore.force_reload()
-      catch
-        :exit, _reason -> :ok
-      end
-    end
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, workflow_prompt_content(overrides))
+    File.write!(pipeline_config_path(path), pipeline_config_content(overrides))
 
     :ok
   end
@@ -88,46 +87,19 @@ defmodule SymphonyElixir.TestSupport do
     end
   end
 
-  defp workflow_content(overrides) do
-    config =
-      Keyword.merge(
-        [
-          tracker_kind: "linear",
-          tracker_endpoint: "https://api.linear.app/graphql",
-          tracker_api_token: "token",
-          tracker_project_slug: "project",
-          tracker_assignee: nil,
-          tracker_active_states: ["Todo", "In Progress"],
-          tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
-          poll_interval_ms: 30_000,
-          workspace_root: Path.join(System.tmp_dir!(), "symphony_workspaces"),
-          worker_ssh_hosts: [],
-          worker_max_concurrent_agents_per_host: nil,
-          max_concurrent_agents: 10,
-          max_turns: 20,
-          max_retry_backoff_ms: 300_000,
-          max_concurrent_agents_by_state: %{},
-          codex_command: "codex app-server",
-          codex_approval_policy: %{reject: %{sandbox_approval: true, rules: true, mcp_elicitations: true}},
-          codex_thread_sandbox: "workspace-write",
-          codex_turn_sandbox_policy: nil,
-          codex_turn_timeout_ms: 3_600_000,
-          codex_read_timeout_ms: 5_000,
-          codex_stall_timeout_ms: 300_000,
-          hook_after_create: nil,
-          hook_before_run: nil,
-          hook_after_run: nil,
-          hook_before_remove: nil,
-          hook_timeout_ms: 60_000,
-          observability_enabled: true,
-          observability_refresh_ms: 1_000,
-          observability_render_interval_ms: 16,
-          server_port: nil,
-          server_host: nil,
-          prompt: @workflow_prompt
-        ],
-        overrides
-      )
+  defp pipeline_config_path(workflow_path) do
+    Path.join(Path.dirname(workflow_path), "pipeline.yaml")
+  end
+
+  defp workflow_prompt_content(overrides) do
+    overrides
+    |> workflow_config()
+    |> Keyword.get(:prompt)
+    |> Kernel.<>("\n")
+  end
+
+  defp pipeline_config_content(overrides) do
+    config = workflow_config(overrides)
 
     tracker_kind = Keyword.get(config, :tracker_kind)
     tracker_endpoint = Keyword.get(config, :tracker_endpoint)
@@ -161,11 +133,11 @@ defmodule SymphonyElixir.TestSupport do
     observability_render_interval_ms = Keyword.get(config, :observability_render_interval_ms)
     server_port = Keyword.get(config, :server_port)
     server_host = Keyword.get(config, :server_host)
-    prompt = Keyword.get(config, :prompt)
 
     sections =
       [
-        "---",
+        "id: \"default\"",
+        "enabled: true",
         "tracker:",
         "  kind: #{yaml_value(tracker_kind)}",
         "  endpoint: #{yaml_value(tracker_endpoint)}",
@@ -192,15 +164,69 @@ defmodule SymphonyElixir.TestSupport do
         "  turn_timeout_ms: #{yaml_value(codex_turn_timeout_ms)}",
         "  read_timeout_ms: #{yaml_value(codex_read_timeout_ms)}",
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",
-        hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
-        observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
-        server_yaml(server_port, server_host),
-        "---",
-        prompt
+        hooks_yaml(
+          hook_after_create,
+          hook_before_run,
+          hook_after_run,
+          hook_before_remove,
+          hook_timeout_ms
+        ),
+        observability_yaml(
+          observability_enabled,
+          observability_refresh_ms,
+          observability_render_interval_ms
+        ),
+        server_yaml(server_port, server_host)
       ]
       |> Enum.reject(&(&1 in [nil, ""]))
 
     Enum.join(sections, "\n") <> "\n"
+  end
+
+  defp workflow_config(overrides) do
+    config =
+      Keyword.merge(
+        [
+          tracker_kind: "linear",
+          tracker_endpoint: "https://api.linear.app/graphql",
+          tracker_api_token: "token",
+          tracker_project_slug: "project",
+          tracker_assignee: nil,
+          tracker_active_states: ["Todo", "In Progress"],
+          tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+          poll_interval_ms: 30_000,
+          workspace_root: Path.join(System.tmp_dir!(), "symphony_workspaces"),
+          worker_ssh_hosts: [],
+          worker_max_concurrent_agents_per_host: nil,
+          max_concurrent_agents: 10,
+          max_turns: 20,
+          max_retry_backoff_ms: 300_000,
+          max_concurrent_agents_by_state: %{},
+          codex_command: "codex app-server",
+          codex_approval_policy: %{
+            reject: %{sandbox_approval: true, rules: true, mcp_elicitations: true}
+          },
+          codex_thread_sandbox: "workspace-write",
+          codex_turn_sandbox_policy: nil,
+          codex_turn_timeout_ms: 3_600_000,
+          codex_read_timeout_ms: 5_000,
+          codex_stall_timeout_ms: 300_000,
+          hook_after_create: nil,
+          hook_before_run: nil,
+          hook_after_run: nil,
+          hook_before_remove: nil,
+          hook_timeout_ms: 60_000,
+          observability_enabled: true,
+          observability_refresh_ms: 1_000,
+          observability_render_interval_ms: 16,
+          server_port: nil,
+          server_host: nil,
+          prompt: @workflow_prompt
+        ],
+        overrides
+      )
+
+    config
   end
 
   defp yaml_value(value) when is_binary(value) do
@@ -225,9 +251,16 @@ defmodule SymphonyElixir.TestSupport do
 
   defp yaml_value(value), do: yaml_value(to_string(value))
 
-  defp hooks_yaml(nil, nil, nil, nil, timeout_ms), do: "hooks:\n  timeout_ms: #{yaml_value(timeout_ms)}"
+  defp hooks_yaml(nil, nil, nil, nil, timeout_ms),
+    do: "hooks:\n  timeout_ms: #{yaml_value(timeout_ms)}"
 
-  defp hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, timeout_ms) do
+  defp hooks_yaml(
+         hook_after_create,
+         hook_before_run,
+         hook_after_run,
+         hook_before_remove,
+         timeout_ms
+       ) do
     [
       "hooks:",
       "  timeout_ms: #{yaml_value(timeout_ms)}",

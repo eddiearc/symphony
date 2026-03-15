@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Config.Schema do
   alias SymphonyElixir.PathSafety
 
   @primary_key false
+  @settings_keys ~w(tracker polling workspace worker agent codex hooks observability server)
 
   @type t :: %__MODULE__{}
 
@@ -287,6 +288,18 @@ defmodule SymphonyElixir.Config.Schema do
       {:error, changeset} ->
         {:error, {:invalid_workflow_config, format_errors(changeset)}}
     end
+  end
+
+  @spec settings_config(map()) :: map()
+  def settings_config(config) when is_map(config) do
+    normalized = normalize_keys(config)
+
+    Enum.reduce(@settings_keys, %{}, fn key, acc ->
+      case Map.fetch(normalized, key) do
+        {:ok, value} -> Map.put(acc, key, value)
+        :error -> acc
+      end
+    end)
   end
 
   @spec resolve_turn_sandbox_policy(%__MODULE__{}, Path.t() | nil) :: map()

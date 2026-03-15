@@ -171,7 +171,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   defp tool_error_payload(:missing_linear_api_token) do
     %{
       "error" => %{
-        "message" => "Symphony is missing Linear auth. Set `linear.api_key` in `WORKFLOW.md` or export `LINEAR_API_KEY`."
+        "message" => "Symphony is missing Linear auth. Set `tracker.api_key` in the pipeline config or export `LINEAR_API_KEY`."
       }
     }
   end

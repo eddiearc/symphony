@@ -1,0 +1,21 @@
+\e[1m╭─ SYMPHONY STATUS\e[0m
+\e[1m│ Agents: \e[0m\e[32m1\e[0m\e[90m/\e[0m\e[90m10\e[0m
+\e[1m│ Throughput: \e[0m\e[36m88 tps\e[0m
+\e[1m│ Runtime: \e[0m\e[35m5m 15s\e[0m
+\e[1m│ Tokens: \e[0m\e[33min 20,000\e[0m\e[90m | \e[0m\e[33mout 4,500\e[0m\e[90m | \e[0m\e[33mtotal 24,500\e[0m
+\e[1m│ Rate Limits: \e[0m\e[90munavailable\e[0m
+\e[1m├─ Pipelines\e[0m
+│
+│  \e[36malpha     \e[0m \e[32mactive     \e[0m \e[32mrun=1\e[0m\e[33m retry=1\e[0m\e[35m next=5s\e[0m \e[36mhttps://linear.app/project/alpha-project/issues\e[0m
+│  \e[36mbeta      \e[0m \e[33mpaused     \e[0m \e[32mrun=0\e[0m\e[33m retry=1\e[0m\e[35m next=paused\e[0m \e[36mhttps://linear.app/project/beta-project/issues\e[0m
+\e[1m├─ Running\e[0m
+│
+│   \e[90mPIPELINE   ID       STAGE          PID      AGE / TURN   TOKENS     SESSION        EVENT                       \e[0m
+│   \e[90m───────────────────────────────────────────────────────────────────────────────────────────────────────────────\e[0m
+│ \e[35m●\e[0m \e[36malpha     \e[0m \e[36mMT-201  \e[0m \e[35mIn Progress   \e[0m \e[33m4242    \e[0m \e[35m5m 15s / 9  \e[0m \e[33m    24,500\e[0m \e[36mthre...567890 \e[0m \e[35mturn completed (completed)  \e[0m
+│
+\e[1m├─ Backoff queue\e[0m
+│
+│  \e[33m↻\e[0m \e[31m[alpha] MT-202\e[0m \e[33mattempt=2\e[0m\e[2m in \e[0m\e[36m2.500s\e[0m \e[2merror=waiting on review feedback\e[0m
+│  \e[33m↻\e[0m \e[31m[beta] MT-203\e[0m \e[33mattempt=1\e[0m\e[2m in \e[0m\e[36m7.000s\e[0m \e[2merror=pipeline paused\e[0m
+╰─

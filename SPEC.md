@@ -10,6 +10,10 @@ Symphony is a long-running automation service that continuously reads work from 
 (Linear in this specification version), creates an isolated workspace for each issue, and runs a
 coding agent session for that issue inside the workspace.
 
+In hosted deployments, one Symphony process may manage multiple independent pipelines at once. Each
+pipeline maps to one tracked project/repository pairing and carries its own prompt template,
+workspace root, tracker target, hooks, and execution limits.
+
 The service solves four operational problems:
 
 - It turns issue execution into a repeatable daemon workflow instead of manual scripts.
@@ -37,11 +41,12 @@ Important boundary:
 ### 2.1 Goals
 
 - Poll the issue tracker on a fixed cadence and dispatch work with bounded concurrency.
+- Support one hosted process supervising multiple independent pipelines.
 - Maintain a single authoritative orchestrator state for dispatch, retries, and reconciliation.
 - Create deterministic per-issue workspaces and preserve them across runs.
 - Stop active runs when issue state changes make them ineligible.
 - Recover from transient failures with exponential backoff.
-- Load runtime behavior from a repository-owned `WORKFLOW.md` contract.
+- Load runtime behavior from pipeline-owned config plus prompt files.
 - Expose operator-visible observability (at minimum structured logs).
 - Support restart recovery without requiring a persistent database.
 
@@ -60,15 +65,15 @@ Important boundary:
 
 ### 3.1 Main Components
 
-1. `Workflow Loader`
-   - Reads `WORKFLOW.md`.
-   - Parses YAML front matter and prompt body.
-   - Returns `{config, prompt_template}`.
+1. `Pipeline Loader`
+   - Reads a `pipelines/` directory or a legacy single `WORKFLOW.md`.
+   - Parses `pipeline.yaml` plus the pipeline-local `WORKFLOW.md` prompt body.
+   - Returns one or more typed pipeline definitions.
 
 2. `Config Layer`
-   - Exposes typed getters for workflow config values.
+   - Exposes typed getters for legacy single-workflow config when compatibility mode is used.
    - Applies defaults and environment variable indirection.
-   - Performs validation used by the orchestrator before dispatch.
+   - Performs validation used by each pipeline orchestrator before dispatch.
 
 3. `Issue Tracker Client`
    - Fetches candidate issues in active states.
@@ -76,51 +81,55 @@ Important boundary:
    - Fetches terminal-state issues during startup cleanup.
    - Normalizes tracker payloads into a stable issue model.
 
-4. `Orchestrator`
-   - Owns the poll tick.
-   - Owns the in-memory runtime state.
+4. `Pipeline Supervisor`
+   - Starts one orchestrator per enabled pipeline.
+   - Keeps pipeline runtimes isolated while sharing the host node.
+
+5. `Orchestrator`
+   - Owns the poll tick for one pipeline.
+   - Owns the in-memory runtime state for that pipeline.
    - Decides which issues to dispatch, retry, stop, or release.
    - Tracks session metrics and retry queue state.
 
-5. `Workspace Manager`
+6. `Workspace Manager`
    - Maps issue identifiers to workspace paths.
    - Ensures per-issue workspace directories exist.
    - Runs workspace lifecycle hooks.
    - Cleans workspaces for terminal issues.
 
-6. `Agent Runner`
+7. `Agent Runner`
    - Creates workspace.
-   - Builds prompt from issue + workflow template.
+   - Builds prompt from issue + pipeline prompt template.
    - Launches the coding agent app-server client.
    - Streams agent updates back to the orchestrator.
 
-7. `Status Surface` (optional)
+8. `Status Surface` (optional)
    - Presents human-readable runtime status (for example terminal output, dashboard, or other
      operator-facing view).
 
-8. `Logging`
+9. `Logging`
    - Emits structured runtime logs to one or more configured sinks.
 
 ### 3.2 Abstraction Levels
 
 Symphony is easiest to port when kept in these layers:
 
-1. `Policy Layer` (repo-defined)
-   - `WORKFLOW.md` prompt body.
+1. `Policy Layer` (pipeline-defined)
+   - Per-pipeline `WORKFLOW.md` prompt body.
    - Team-specific rules for ticket handling, validation, and handoff.
 
 2. `Configuration Layer` (typed getters)
-   - Parses front matter into typed runtime settings.
+   - Parses pipeline config into typed runtime settings.
    - Handles defaults, environment tokens, and path normalization.
 
-3. `Coordination Layer` (orchestrator)
-   - Polling loop, issue eligibility, concurrency, retries, reconciliation.
+3. `Coordination Layer` (pipeline supervisor + orchestrators)
+   - Pipeline startup, per-pipeline polling loops, issue eligibility, concurrency, retries, reconciliation.
 
 4. `Execution Layer` (workspace + agent subprocess)
    - Filesystem lifecycle, workspace preparation, coding-agent protocol.
 
 5. `Integration Layer` (Linear adapter)
-   - API calls and normalization for tracker data.
+   - API calls and normalization for tracker data, scoped per pipeline.
 
 6. `Observability Layer` (logs + optional status surface)
    - Operator visibility into orchestrator and agent behavior.
