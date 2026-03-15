@@ -420,6 +420,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "issue_id" => "issue-http",
                  "issue_identifier" => "MT-HTTP",
                  "state" => "In Progress",
+                 "worker_host" => nil,
+                 "workspace_path" => nil,
                  "session_id" => "thread-http",
                  "turn_count" => 7,
                  "last_event" => "notification",
@@ -435,7 +437,9 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "issue_identifier" => "MT-RETRY",
                  "attempt" => 2,
                  "due_at" => state_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
-                 "error" => "boom"
+                 "error" => "boom",
+                 "worker_host" => nil,
+                 "workspace_path" => nil
                }
              ],
              "codex_totals" => %{
@@ -461,9 +465,14 @@ defmodule SymphonyElixir.ExtensionsTest do
              "issue_identifier" => "MT-HTTP",
              "issue_id" => "issue-http",
              "status" => "running",
-             "workspace" => %{"path" => Path.join(Config.settings!().workspace.root, "MT-HTTP")},
+             "workspace" => %{
+               "path" => Path.join(Config.settings!().workspace.root, "MT-HTTP"),
+               "host" => nil
+             },
              "attempts" => %{"restart_count" => 0, "current_retry_attempt" => 0},
              "running" => %{
+               "worker_host" => nil,
+               "workspace_path" => nil,
                "session_id" => "thread-http",
                "turn_count" => 7,
                "state" => "In Progress",
@@ -659,6 +668,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "last_message" => "rendered",
                  "started_at" => alpha_payload["running"] |> List.first() |> Map.fetch!("started_at"),
                  "last_event_at" => nil,
+                 "worker_host" => nil,
+                 "workspace_path" => nil,
                  "tokens" => %{"input_tokens" => 4, "output_tokens" => 8, "total_tokens" => 12}
                }
              ],
@@ -668,7 +679,9 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "issue_identifier" => "MT-RETRY",
                  "attempt" => 2,
                  "due_at" => alpha_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
-                 "error" => "boom"
+                 "error" => "boom",
+                 "worker_host" => nil,
+                 "workspace_path" => nil
                }
              ],
              "codex_totals" => %{

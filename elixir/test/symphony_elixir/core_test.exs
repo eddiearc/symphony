@@ -1111,6 +1111,60 @@ defmodule SymphonyElixir.CoreTest do
     assert due_at_ms - scheduled_at_ms == expected_delay_ms
   end
 
+  test "select_worker_host_for_test skips full ssh hosts under the shared per-host cap" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      worker_ssh_hosts: ["worker-a", "worker-b"],
+      worker_max_concurrent_agents_per_host: 1
+    )
+
+    state = %Orchestrator.State{
+      running: %{
+        "issue-1" => %{worker_host: "worker-a"}
+      }
+    }
+
+    assert Orchestrator.select_worker_host_for_test(state, nil) == "worker-b"
+  end
+
+  test "select_worker_host_for_test returns no_worker_capacity when every ssh host is full" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      worker_ssh_hosts: ["worker-a", "worker-b"],
+      worker_max_concurrent_agents_per_host: 1
+    )
+
+    state = %Orchestrator.State{
+      running: %{
+        "issue-1" => %{worker_host: "worker-a"},
+        "issue-2" => %{worker_host: "worker-b"}
+      }
+    }
+
+    assert Orchestrator.select_worker_host_for_test(state, nil) == :no_worker_capacity
+  end
+
+  test "select_worker_host_for_test keeps the preferred ssh host when it still has capacity" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      worker_ssh_hosts: ["worker-a", "worker-b"],
+      worker_max_concurrent_agents_per_host: 2
+    )
+
+    state = %Orchestrator.State{
+      running: %{
+        "issue-1" => %{worker_host: "worker-a"},
+        "issue-2" => %{worker_host: "worker-b"}
+      }
+    }
+
+    assert Orchestrator.select_worker_host_for_test(state, "worker-a") == "worker-a"
+  end
+
+  defp assert_due_in_range(due_at_ms, min_remaining_ms, max_remaining_ms) do
+    remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
+
+    assert remaining_ms >= min_remaining_ms
+    assert remaining_ms <= max_remaining_ms
+  end
+
   defp restore_app_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
   defp restore_app_env(key, value), do: Application.put_env(:symphony_elixir, key, value)
 

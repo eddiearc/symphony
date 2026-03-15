@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   """
 
   require Logger
-  alias SymphonyElixir.{Codex.DynamicTool, Config, PathSafety, Pipeline}
+  alias SymphonyElixir.{Codex.DynamicTool, Config, PathSafety, Pipeline, SSH}
   alias SymphonyElixir.Config.Schema
 
   @initialize_id 1
@@ -24,12 +24,13 @@ defmodule SymphonyElixir.Codex.AppServer do
           turn_timeout_ms: pos_integer(),
           turn_sandbox_policy: map(),
           thread_id: String.t(),
-          workspace: Path.t()
+          workspace: Path.t(),
+          worker_host: String.t() | nil
         }
 
   @spec run(Path.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def run(workspace, prompt, issue, opts \\ []) do
-    with {:ok, session} <- start_session(workspace, Keyword.get(opts, :pipeline)) do
+    with {:ok, session} <- start_session(workspace, opts) do
       try do
         run_turn(session, prompt, issue, opts)
       after
@@ -38,13 +39,24 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  @spec start_session(Path.t(), Pipeline.t() | nil) :: {:ok, session()} | {:error, term()}
-  def start_session(workspace, pipeline \\ nil) do
-    with {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, pipeline),
-         {:ok, port} <- start_port(expanded_workspace, pipeline) do
-      metadata = port_metadata(port)
+  @spec start_session(Path.t()) :: {:ok, session()} | {:error, term()}
+  def start_session(workspace), do: start_session(workspace, nil)
 
-      with {:ok, session_policies} <- session_policies(expanded_workspace, pipeline),
+  @spec start_session(Path.t(), Pipeline.t() | keyword() | nil) :: {:ok, session()} | {:error, term()}
+  def start_session(workspace, %Pipeline{} = pipeline) do
+    start_session(workspace, pipeline: pipeline)
+  end
+
+  def start_session(workspace, opts) when is_list(opts) or is_nil(opts) do
+    opts = opts || []
+    pipeline = Keyword.get(opts, :pipeline)
+    worker_host = Keyword.get(opts, :worker_host)
+
+    with {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, pipeline, worker_host),
+         {:ok, port} <- start_port(expanded_workspace, pipeline, worker_host) do
+      metadata = port_metadata(port, worker_host)
+
+      with {:ok, session_policies} <- session_policies(expanded_workspace, pipeline, worker_host),
            {:ok, thread_id} <- do_start_session(port, expanded_workspace, session_policies) do
         {:ok,
          %{
@@ -57,7 +69,8 @@ defmodule SymphonyElixir.Codex.AppServer do
            turn_timeout_ms: session_policies.turn_timeout_ms,
            turn_sandbox_policy: session_policies.turn_sandbox_policy,
            thread_id: thread_id,
-           workspace: expanded_workspace
+           workspace: expanded_workspace,
+           worker_host: worker_host
          }}
       else
         {:error, reason} ->
@@ -162,7 +175,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     stop_port(port)
   end
 
-  defp validate_workspace_cwd(workspace, pipeline) when is_binary(workspace) do
+  defp validate_workspace_cwd(workspace, pipeline, nil) when is_binary(workspace) do
     expanded_workspace = Path.expand(workspace)
     expanded_root = workspace_root(pipeline)
     expanded_root_prefix = expanded_root <> "/"
@@ -190,7 +203,21 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp start_port(workspace, pipeline) do
+  defp validate_workspace_cwd(workspace, _pipeline, worker_host)
+       when is_binary(workspace) and is_binary(worker_host) do
+    cond do
+      String.trim(workspace) == "" ->
+        {:error, {:invalid_workspace_cwd, :empty_remote_workspace, worker_host}}
+
+      String.contains?(workspace, ["\n", "\r", <<0>>]) ->
+        {:error, {:invalid_workspace_cwd, :invalid_remote_workspace, worker_host, workspace}}
+
+      true ->
+        {:ok, workspace}
+    end
+  end
+
+  defp start_port(workspace, pipeline, nil) do
     executable = System.find_executable("bash")
 
     if is_nil(executable) do
@@ -213,13 +240,32 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp port_metadata(port) when is_port(port) do
-    case :erlang.port_info(port, :os_pid) do
-      {:os_pid, os_pid} ->
-        %{codex_app_server_pid: to_string(os_pid)}
+  defp start_port(workspace, pipeline, worker_host) when is_binary(worker_host) do
+    remote_command = remote_launch_command(workspace, pipeline)
+    SSH.start_port(worker_host, remote_command, line: @port_line_bytes)
+  end
 
-      _ ->
-        %{}
+  defp remote_launch_command(workspace, pipeline) when is_binary(workspace) do
+    [
+      "cd #{shell_escape(workspace)}",
+      "exec #{codex_command(pipeline)}"
+    ]
+    |> Enum.join(" && ")
+  end
+
+  defp port_metadata(port, worker_host) when is_port(port) do
+    base_metadata =
+      case :erlang.port_info(port, :os_pid) do
+        {:os_pid, os_pid} ->
+          %{codex_app_server_pid: to_string(os_pid)}
+
+        _ ->
+          %{}
+      end
+
+    case worker_host do
+      host when is_binary(host) -> Map.put(base_metadata, :worker_host, host)
+      _ -> base_metadata
     end
   end
 
@@ -247,7 +293,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp session_policies(workspace, %Pipeline{} = pipeline) do
+  defp session_policies(workspace, %Pipeline{} = pipeline, nil) do
     with {:ok, turn_sandbox_policy} <-
            Schema.resolve_runtime_turn_sandbox_policy(
              pipeline_settings(pipeline),
@@ -264,8 +310,30 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp session_policies(workspace, _pipeline) do
+  defp session_policies(workspace, %Pipeline{} = pipeline, worker_host) when is_binary(worker_host) do
+    with {:ok, turn_sandbox_policy} <-
+           Schema.resolve_runtime_turn_sandbox_policy(
+             pipeline_settings(pipeline),
+             workspace,
+             remote: true
+           ) do
+      {:ok,
+       %{
+         approval_policy: pipeline.codex.approval_policy,
+         thread_sandbox: pipeline.codex.thread_sandbox,
+         turn_sandbox_policy: turn_sandbox_policy,
+         turn_timeout_ms: pipeline.codex.turn_timeout_ms,
+         read_timeout_ms: pipeline.codex.read_timeout_ms
+       }}
+    end
+  end
+
+  defp session_policies(workspace, _pipeline, nil) do
     Config.codex_runtime_settings(workspace)
+  end
+
+  defp session_policies(workspace, _pipeline, worker_host) when is_binary(worker_host) do
+    Config.codex_runtime_settings(workspace, remote: true)
   end
 
   defp do_start_session(port, workspace, session_policies) do
@@ -286,7 +354,7 @@ defmodule SymphonyElixir.Codex.AppServer do
       "params" => %{
         "approvalPolicy" => approval_policy,
         "sandbox" => thread_sandbox,
-        "cwd" => Path.expand(workspace),
+        "cwd" => workspace,
         "dynamicTools" => DynamicTool.tool_specs()
       }
     })
@@ -324,7 +392,7 @@ defmodule SymphonyElixir.Codex.AppServer do
             "text" => prompt
           }
         ],
-        "cwd" => Path.expand(workspace),
+        "cwd" => workspace,
         "title" => "#{issue.identifier}: #{issue.title}",
         "approvalPolicy" => approval_policy,
         "sandboxPolicy" => turn_sandbox_policy
@@ -593,7 +661,10 @@ defmodule SymphonyElixir.Codex.AppServer do
     tool_name = tool_call_name(params)
     arguments = tool_call_arguments(params)
 
-    result = tool_executor.(tool_name, arguments)
+    result =
+      tool_name
+      |> tool_executor.(arguments)
+      |> normalize_dynamic_tool_result()
 
     send_message(port, %{
       "id" => id,
@@ -711,6 +782,44 @@ defmodule SymphonyElixir.Codex.AppServer do
          _auto_approve_requests
        ) do
     :unhandled
+  end
+
+  defp normalize_dynamic_tool_result(%{"success" => success} = result) when is_boolean(success) do
+    output =
+      case Map.get(result, "output") do
+        existing_output when is_binary(existing_output) -> existing_output
+        _ -> dynamic_tool_output(result)
+      end
+
+    content_items =
+      case Map.get(result, "contentItems") do
+        existing_items when is_list(existing_items) -> existing_items
+        _ -> dynamic_tool_content_items(output)
+      end
+
+    result
+    |> Map.put("output", output)
+    |> Map.put("contentItems", content_items)
+  end
+
+  defp normalize_dynamic_tool_result(result) do
+    %{
+      "success" => false,
+      "output" => inspect(result),
+      "contentItems" => dynamic_tool_content_items(inspect(result))
+    }
+  end
+
+  defp dynamic_tool_output(%{"contentItems" => [%{"text" => text} | _]}) when is_binary(text), do: text
+  defp dynamic_tool_output(result), do: Jason.encode!(result, pretty: true)
+
+  defp dynamic_tool_content_items(output) when is_binary(output) do
+    [
+      %{
+        "type" => "inputText",
+        "text" => output
+      }
+    ]
   end
 
   defp approve_or_require(
@@ -1007,7 +1116,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp metadata_from_message(port, payload) do
-    port |> port_metadata() |> maybe_set_usage(payload)
+    port |> port_metadata(nil) |> maybe_set_usage(payload)
   end
 
   defp maybe_set_usage(metadata, payload) when is_map(payload) do
@@ -1021,6 +1130,10 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp maybe_set_usage(metadata, _payload), do: metadata
+
+  defp shell_escape(value) when is_binary(value) do
+    "'" <> String.replace(value, "'", "'\"'\"'") <> "'"
+  end
 
   defp default_on_message(_message), do: :ok
 
@@ -1105,6 +1218,7 @@ defmodule SymphonyElixir.Codex.AppServer do
       tracker: pipeline.tracker,
       polling: pipeline.polling,
       workspace: pipeline.workspace,
+      worker: pipeline.worker,
       agent: pipeline.agent,
       codex: pipeline.codex,
       hooks: pipeline.hooks,

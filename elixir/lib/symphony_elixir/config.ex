@@ -36,6 +36,7 @@ defmodule SymphonyElixir.Config do
          tracker: pipeline.tracker,
          polling: pipeline.polling,
          workspace: pipeline.workspace,
+         worker: pipeline.worker,
          agent: pipeline.agent,
          codex: pipeline.codex,
          hooks: pipeline.hooks,
@@ -155,11 +156,12 @@ defmodule SymphonyElixir.Config do
     end
   end
 
-  @spec codex_runtime_settings(Path.t() | nil) :: {:ok, codex_runtime_settings()} | {:error, term()}
-  def codex_runtime_settings(workspace \\ nil) do
+  @spec codex_runtime_settings(Path.t() | nil, keyword()) ::
+          {:ok, codex_runtime_settings()} | {:error, term()}
+  def codex_runtime_settings(workspace \\ nil, opts \\ []) do
     with {:ok, settings} <- settings() do
       with {:ok, turn_sandbox_policy} <-
-             Schema.resolve_runtime_turn_sandbox_policy(settings, workspace) do
+             Schema.resolve_runtime_turn_sandbox_policy(settings, workspace, opts) do
         {:ok,
          %{
            approval_policy: settings.codex.approval_policy,

@@ -7,6 +7,8 @@ defmodule SymphonyElixir.AgentRunner do
   alias SymphonyElixir.Codex.AppServer
   alias SymphonyElixir.{Config, Linear.Issue, Pipeline, PromptBuilder, Tracker, Workspace}
 
+  @type worker_host :: String.t() | nil
+
   @spec run(map()) :: :ok | no_return()
   def run(issue), do: run(issue, nil, [])
 
@@ -34,6 +36,60 @@ defmodule SymphonyElixir.AgentRunner do
     run_with_pipeline(pipeline, issue, codex_update_recipient, opts)
   end
 
+  defp run_with_pipeline(pipeline, issue, codex_update_recipient, opts) do
+    worker_hosts = candidate_worker_hosts(Keyword.get(opts, :worker_host), ssh_hosts(pipeline))
+
+    Logger.info("Starting agent run for #{issue_context(issue)}#{pipeline_log_context(pipeline)} worker_hosts=#{inspect(worker_hosts_for_log(worker_hosts))}")
+
+    case run_on_worker_hosts(pipeline, issue, codex_update_recipient, opts, worker_hosts) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        raise_agent_run_failure(issue, reason, pipeline)
+    end
+  end
+
+  defp run_on_worker_hosts(pipeline, issue, codex_update_recipient, opts, [worker_host | rest]) do
+    case run_on_worker_host(pipeline, issue, codex_update_recipient, opts, worker_host) do
+      :ok ->
+        :ok
+
+      {:error, reason} when rest != [] ->
+        Logger.warning(
+          "Agent run failed for #{issue_context(issue)}#{pipeline_log_context(pipeline)} worker_host=#{worker_host_for_log(worker_host)} reason=#{inspect(reason)}; trying next worker host"
+        )
+
+        run_on_worker_hosts(pipeline, issue, codex_update_recipient, opts, rest)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp run_on_worker_hosts(_pipeline, _issue, _codex_update_recipient, _opts, []),
+    do: {:error, :no_worker_hosts_available}
+
+  defp run_on_worker_host(pipeline, issue, codex_update_recipient, opts, worker_host) do
+    Logger.info("Starting worker attempt for #{issue_context(issue)}#{pipeline_log_context(pipeline)} worker_host=#{worker_host_for_log(worker_host)}")
+
+    case create_workspace_for_issue(pipeline, issue, worker_host) do
+      {:ok, workspace} ->
+        send_worker_runtime_info(codex_update_recipient, issue, worker_host, workspace)
+
+        try do
+          with :ok <- run_before_run_hook(pipeline, workspace, issue, worker_host) do
+            run_codex_turns(pipeline, workspace, issue, codex_update_recipient, opts, worker_host)
+          end
+        after
+          run_after_run_hook(pipeline, workspace, issue, worker_host)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   defp codex_message_handler(recipient, issue) do
     fn message ->
       send_codex_update(recipient, issue, message)
@@ -48,46 +104,23 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp send_codex_update(_recipient, _issue, _message), do: :ok
 
-  defp run_with_pipeline(pipeline, issue, codex_update_recipient, opts) do
-    Logger.info("Starting agent run for #{issue_context(issue)}#{pipeline_log_context(pipeline)}")
+  defp send_worker_runtime_info(recipient, %Issue{id: issue_id}, worker_host, workspace)
+       when is_binary(issue_id) and is_pid(recipient) and is_binary(workspace) do
+    send(
+      recipient,
+      {:worker_runtime_info, issue_id,
+       %{
+         worker_host: worker_host,
+         workspace_path: workspace
+       }}
+    )
 
-    {create_workspace, before_run_hook, after_run_hook} =
-      case pipeline do
-        %Pipeline{} = pipeline ->
-          {
-            fn -> Workspace.create_for_issue(pipeline, issue) end,
-            fn workspace -> Workspace.run_before_run_hook(pipeline, workspace, issue) end,
-            fn workspace -> Workspace.run_after_run_hook(pipeline, workspace, issue) end
-          }
-
-        _ ->
-          {
-            fn -> Workspace.create_for_issue(issue) end,
-            fn workspace -> Workspace.run_before_run_hook(workspace, issue) end,
-            fn workspace -> Workspace.run_after_run_hook(workspace, issue) end
-          }
-      end
-
-    case create_workspace.() do
-      {:ok, workspace} ->
-        try do
-          with :ok <- before_run_hook.(workspace),
-               :ok <- run_codex_turns(pipeline, workspace, issue, codex_update_recipient, opts) do
-            :ok
-          else
-            {:error, reason} ->
-              raise_agent_run_failure(issue, reason, pipeline)
-          end
-        after
-          after_run_hook.(workspace)
-        end
-
-      {:error, reason} ->
-        raise_agent_run_failure(issue, reason, pipeline)
-    end
+    :ok
   end
 
-  defp run_codex_turns(pipeline, workspace, issue, codex_update_recipient, opts) do
+  defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
+
+  defp run_codex_turns(pipeline, workspace, issue, codex_update_recipient, opts, worker_host) do
     max_turns = Keyword.get(opts, :max_turns, max_turns(pipeline))
 
     issue_state_fetcher =
@@ -102,7 +135,7 @@ defmodule SymphonyElixir.AgentRunner do
       max_turns: max_turns
     }
 
-    with {:ok, session} <- AppServer.start_session(workspace, pipeline) do
+    with {:ok, session} <- AppServer.start_session(workspace, app_server_opts(pipeline, worker_host)) do
       try do
         do_run_codex_turns(session, run_context, issue, 1)
       after
@@ -198,6 +231,34 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp active_issue_state?(_pipeline, _state_name), do: false
 
+  defp candidate_worker_hosts(nil, []), do: [nil]
+
+  defp candidate_worker_hosts(preferred_host, configured_hosts) when is_list(configured_hosts) do
+    hosts =
+      configured_hosts
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.uniq()
+
+    case preferred_host do
+      host when is_binary(host) and host != "" ->
+        [host | Enum.reject(hosts, &(&1 == host))]
+
+      _ when hosts == [] ->
+        [nil]
+
+      _ ->
+        hosts
+    end
+  end
+
+  defp worker_hosts_for_log(worker_hosts) do
+    Enum.map(worker_hosts, &worker_host_for_log/1)
+  end
+
+  defp worker_host_for_log(nil), do: "local"
+  defp worker_host_for_log(worker_host), do: worker_host
+
   defp normalize_issue_state(state_name) when is_binary(state_name) do
     state_name
     |> String.trim()
@@ -225,6 +286,59 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp active_states(%Pipeline{tracker: tracker}), do: tracker.active_states
   defp active_states(_pipeline), do: Config.settings!().tracker.active_states
+
+  defp ssh_hosts(%Pipeline{worker: worker}), do: worker.ssh_hosts || []
+  defp ssh_hosts(_pipeline), do: Config.settings!().worker.ssh_hosts || []
+
+  defp create_workspace_for_issue(%Pipeline{} = pipeline, issue, nil),
+    do: Workspace.create_for_issue(pipeline, issue)
+
+  defp create_workspace_for_issue(%Pipeline{} = pipeline, issue, worker_host)
+       when is_binary(worker_host),
+       do: Workspace.create_for_issue(pipeline, issue, worker_host)
+
+  defp create_workspace_for_issue(_pipeline, issue, nil), do: Workspace.create_for_issue(issue)
+  defp create_workspace_for_issue(_pipeline, issue, worker_host), do: Workspace.create_for_issue(issue, worker_host)
+
+  defp run_before_run_hook(%Pipeline{} = pipeline, workspace, issue, nil),
+    do: Workspace.run_before_run_hook(pipeline, workspace, issue)
+
+  defp run_before_run_hook(%Pipeline{} = pipeline, workspace, issue, worker_host)
+       when is_binary(worker_host),
+       do: Workspace.run_before_run_hook(pipeline, workspace, issue, worker_host)
+
+  defp run_before_run_hook(_pipeline, workspace, issue, nil),
+    do: Workspace.run_before_run_hook(workspace, issue)
+
+  defp run_before_run_hook(_pipeline, workspace, issue, worker_host),
+    do: Workspace.run_before_run_hook(workspace, issue, worker_host)
+
+  defp run_after_run_hook(%Pipeline{} = pipeline, workspace, issue, nil),
+    do: Workspace.run_after_run_hook(pipeline, workspace, issue)
+
+  defp run_after_run_hook(%Pipeline{} = pipeline, workspace, issue, worker_host)
+       when is_binary(worker_host),
+       do: Workspace.run_after_run_hook(pipeline, workspace, issue, worker_host)
+
+  defp run_after_run_hook(_pipeline, workspace, issue, nil),
+    do: Workspace.run_after_run_hook(workspace, issue)
+
+  defp run_after_run_hook(_pipeline, workspace, issue, worker_host),
+    do: Workspace.run_after_run_hook(workspace, issue, worker_host)
+
+  defp app_server_opts(pipeline, worker_host) do
+    []
+    |> maybe_put_pipeline(pipeline)
+    |> maybe_put_worker_host(worker_host)
+  end
+
+  defp maybe_put_pipeline(opts, %Pipeline{} = pipeline), do: Keyword.put(opts, :pipeline, pipeline)
+  defp maybe_put_pipeline(opts, _pipeline), do: opts
+
+  defp maybe_put_worker_host(opts, worker_host) when is_binary(worker_host),
+    do: Keyword.put(opts, :worker_host, worker_host)
+
+  defp maybe_put_worker_host(opts, _worker_host), do: opts
 
   defp pipeline_log_context(%Pipeline{id: pipeline_id}), do: " pipeline_id=#{pipeline_id}"
   defp pipeline_log_context(_pipeline), do: ""
