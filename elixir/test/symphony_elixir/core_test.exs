@@ -262,10 +262,13 @@ defmodule SymphonyElixir.CoreTest do
     assert {:ok, %{config: config, prompt: prompt}} = Workflow.default_pipeline_template()
     assert is_map(config)
 
+    assert Map.get(config, "id") == "default"
+    assert Map.get(config, "enabled") == true
+
     tracker = Map.get(config, "tracker", %{})
     assert is_map(tracker)
     assert Map.get(tracker, "kind") == "linear"
-    assert is_binary(Map.get(tracker, "project_slug"))
+    assert Map.get(tracker, "project_slug") == "symphony-cb81294e364c"
     assert is_list(Map.get(tracker, "active_states"))
     assert is_list(Map.get(tracker, "terminal_states"))
 
@@ -273,15 +276,14 @@ defmodule SymphonyElixir.CoreTest do
     assert is_map(hooks)
 
     assert Map.get(hooks, "after_create") =~
-             "git clone --depth 1 https://github.com/openai/symphony ."
+             "git clone --depth 1 https://github.com/eddiearc/symphony ."
 
     assert Map.get(hooks, "after_create") =~ "mise trust"
     assert Map.get(hooks, "after_create") =~ "mise exec -- mix deps.get"
-    assert Map.get(hooks, "before_remove") =~ "mix workspace.before_remove"
 
     assert String.trim(prompt) != ""
-    assert prompt =~ "You are working on a Linear ticket `{{ issue.identifier }}`"
-    assert prompt =~ "This is an unattended orchestration session."
+    assert prompt =~ "你正在处理 Symphony 仓库中的 Linear 工单 `{{ issue.identifier }}`"
+    assert prompt =~ "这是一次无人值守的编排会话"
   end
 
   test "linear api token resolves from LINEAR_API_KEY env var" do
@@ -1305,19 +1307,18 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(pipeline, issue, attempt: 2)
 
-    assert prompt =~ "You are working on a Linear ticket `MT-616`"
-    assert prompt =~ "Issue context:"
-    assert prompt =~ "Identifier: MT-616"
-    assert prompt =~ "Title: Use rich templates for WORKFLOW.md"
-    assert prompt =~ "Current status: In Progress"
+    assert prompt =~ "你正在处理 Symphony 仓库中的 Linear 工单 `MT-616`"
+    assert prompt =~ "工单上下文："
+    assert prompt =~ "标识：MT-616"
+    assert prompt =~ "标题：Use rich templates for WORKFLOW.md"
+    assert prompt =~ "当前状态：In Progress"
     assert prompt =~ "https://example.org/issues/MT-616/use-rich-templates-for-workflowmd"
-    assert prompt =~ "This is an unattended orchestration session."
-    assert prompt =~ "Only stop early for a true blocker"
-    assert prompt =~ "Do not include \"next steps for user\"."
-    assert prompt =~ "open and follow `.codex/skills/land/SKILL.md`"
-    assert prompt =~ "do not call `gh pr merge` directly"
-    assert prompt =~ "Continuation context:"
-    assert prompt =~ "This is retry attempt #2"
+    assert prompt =~ "这是一次无人值守的编排会话"
+    assert prompt =~ "只有在出现真正的阻塞时才可以提前停止"
+    assert prompt =~ "不要包含“给用户的下一步”"
+    assert prompt =~ "这是第 #2 次重试"
+    assert prompt =~ "## Symphony 项目专属要求"
+    assert prompt =~ "## 前提条件：可使用 Linear MCP 或 `linear_graphql` 工具"
   end
 
   test "prompt builder adds continuation guidance for retries" do

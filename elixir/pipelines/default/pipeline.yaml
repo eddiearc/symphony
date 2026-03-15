@@ -2,7 +2,7 @@ id: "default"
 enabled: true
 tracker:
   kind: "linear"
-  project_slug: "workcow-3ded0ff156f2"
+  project_slug: "symphony-cb81294e364c"
   active_states: ["Todo", "In Progress", "Merging", "Rework"]
   terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
 polling:
@@ -20,12 +20,11 @@ codex:
     type: "dangerFullAccess"
 hooks:
   after_create: |
-    git clone --depth 1 https://github.com/eddiearc/workcow .
-    if command -v pnpm >/dev/null 2>&1; then
-      pnpm install --frozen-lockfile
-    elif command -v corepack >/dev/null 2>&1; then
-      corepack pnpm install --frozen-lockfile
-    else
-      echo "pnpm/corepack not found in PATH" >&2
+    git clone --depth 1 https://github.com/eddiearc/symphony .
+    if ! command -v mise >/dev/null 2>&1; then
+      echo "mise not found in PATH" >&2
       exit 1
     fi
+    cd elixir
+    mise trust
+    mise exec -- mix deps.get

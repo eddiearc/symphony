@@ -2,7 +2,7 @@
 tracker:
   active_states: ["Todo", "In Progress", "Merging", "Rework"]
   kind: "linear"
-  project_slug: "workcow-3ded0ff156f2"
+  project_slug: "symphony-cb81294e364c"
   terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
 polling:
   interval_ms: 5000
@@ -19,17 +19,16 @@ codex:
     type: "dangerFullAccess"
 hooks:
   after_create: |
-    git clone --depth 1 https://github.com/eddiearc/workcow .
-    if command -v pnpm >/dev/null 2>&1; then
-      pnpm install --frozen-lockfile
-    elif command -v corepack >/dev/null 2>&1; then
-      corepack pnpm install --frozen-lockfile
-    else
-      echo "pnpm/corepack not found in PATH" >&2
+    git clone --depth 1 https://github.com/eddiearc/symphony .
+    if ! command -v mise >/dev/null 2>&1; then
+      echo "mise not found in PATH" >&2
       exit 1
     fi
+    cd elixir
+    mise trust
+    mise exec -- mix deps.get
 ---
-你正在处理 Linear 工单 `{{ issue.identifier }}`
+你正在处理 Symphony 仓库中的 Linear 工单 `{{ issue.identifier }}`
 
 {% if attempt %}
 继续执行上下文：
@@ -63,18 +62,17 @@ URL: {{ issue.url }}
 
 只在提供的仓库副本中工作。不要触碰其他任何路径。
 
-## WorkCow 项目专属要求
+## Symphony 项目专属要求
 
 - 将仓库中的 `AGENTS.md` 视为必须遵守的项目规则。
-- WorkCow 是 Electron + React + TypeScript + pnpm 项目，不是 Elixir 项目。
-- 只要改动了 `.ts` / `.tsx` / `.js` / `.jsx` 文件，在仓库规则要求时必须同步更新文件头注释。
-- 只要改动了某个目录，在仓库规则要求时必须同步更新该目录下的 `README.md`。
-- 安装、构建、测试和应用验证优先使用 `pnpm` 命令。
-- WorkCow 默认验证梯度：
-  - 先跑定向单元/集成测试：`pnpm test -- <path-or-pattern>`
-  - 当 renderer / electron / shared runtime 代码发生变化时，再跑 `pnpm build`
-  - 当工单改动了用户可见的桌面端路径，且存在相关覆盖时，再做 Playwright / Electron 流程验证
-- 当工单改动 renderer 或 Electron 行为时，验收标准中必须明确写出受影响的 WorkCow 用户路径（例如：任务列表、workspace 切换、provider 设置、composer、memory manager、权限弹窗、文件预览）。
+- 当前仓库的主要运行时代码在 `elixir/` 目录下。
+- 涉及运行时、LiveView、Mix task、测试或文档改动时，优先在仓库根目录执行 `make -C elixir ...`，或进入 `elixir/` 后使用 `mise exec -- mix ...`。
+- 对 Elixir 代码改动，默认验证梯度：
+  - 先跑定向测试：`cd elixir && mise exec -- mix test <path>`
+  - 涉及格式或静态检查时，跑 `cd elixir && mise exec -- mix format --check-formatted`
+  - 在准备提交或推送前，优先跑 `make -C elixir all`
+- 如果改动了 dashboard / LiveView UI，验收标准中必须写明受影响页面或用户路径（例如：`/panel/config`、`/panel/logs`、`/api/v1/pipelines`）。
+- 如果改动涉及 pipeline 模板、启动路径或配置编辑器，必须同步检查 `elixir/README.md` 与默认模板是否仍一致。
 
 ## 前提条件：可使用 Linear MCP 或 `linear_graphql` 工具
 
@@ -162,7 +160,7 @@ agent 必须能够与 Linear 通信，可以通过已配置的 Linear MCP server
 6. 在同一条评论中，以 checklist 形式补充明确的验收标准和 TODO。
     - 如果改动对用户可见，必须加入一条 UI walkthrough 验收标准，描述需要端到端验证的用户路径。
     - 如果该 UI walkthrough 涉及用户可见界面，必须产出可审阅的截图或短视频，并上传到对应 Linear issue；不要只把媒体留在本地、终端输出、PR 评论或 workpad 中。
-    - 如果改动触及 WorkCow app 文件或应用行为，必须在 workpad 的 `Acceptance Criteria` 中加入明确的 app 级流程检查（启动/构建路径、被修改的交互路径、期望结果路径，以及相关 workspace 影响）。
+    - 如果改动触及 dashboard、LiveView、HTTP API 或 pipeline 配置流，必须在 workpad 的 `Acceptance Criteria` 中加入明确的页面级或接口级流程检查（启动/访问路径、被修改的交互路径、期望结果路径，以及相关 pipeline 影响）。
     - 如果 ticket 描述或评论上下文中包含 `Validation`、`Test Plan` 或 `Testing` 章节，则必须将其要求复制进 workpad 的 `Acceptance Criteria` 和 `Validation` 章节，并以必选 checkbox 形式保留（不能降级成可选）。
 7. 以 principal 风格对计划做一次自审，并在评论中继续打磨。
 8. 在开始实现前，捕获一个具体的复现信号，并记录到 workpad 的 `Notes` 章节（命令/输出、截图，或可确定复现的 UI 行为）。
@@ -217,11 +215,11 @@ agent 必须能够与 Linear 通信，可以通过已配置的 Linear MCP server
 5. 执行当前 scope 所要求的验证/测试。
     - 强制门槛：如果 ticket 中提供了 `Validation` / `Test Plan` / `Testing` 要求，必须全部执行；任何未满足项都视为工作未完成。
     - 优先选择能直接证明你所修改行为的定向证据。
-    - 对 WorkCow，优先选择定向 `pnpm test -- ...` 覆盖；当 renderer / electron / shared runtime 代码变化时，补跑 `pnpm build`。
+    - 对 Symphony Elixir，优先选择定向 `mix test` 覆盖；当配置、编排、LiveView 或服务行为变化时，补跑 `make -C elixir all` 或同等级验证。
     - 当这样做能提高信心时，可以进行临时本地 proof edit 来验证假设（例如：调整 `make` 的本地构建输入，或临时写死一个 UI 账号/响应路径）。
     - 所有临时 proof edit 都必须在 commit/push 之前恢复。
     - 这些临时 proof 步骤和结果必须记录到 workpad 的 `Validation` / `Notes` 中，方便 reviewer 跟踪证据链。
-    - 如果改动触及 app，且工单变更了用户可见的桌面路径，则必须执行最接近实际的 WorkCow runtime proof：优先相关 Playwright / Electron 覆盖；若不可用，则至少执行本地启动/构建验证，例如 `pnpm dev`、`pnpm build && pnpm start`，或其他更窄的 runtime 检查。把精确命令和观察结果记录到 workpad 中。
+    - 如果改动触及 dashboard、LiveView、HTTP API 或 pipeline 配置流，则必须执行最接近实际的 Symphony runtime proof：优先相关 LiveView / API 测试；若不可用，则至少执行本地启动或页面检查。把精确命令和观察结果记录到 workpad 中。
     - 只要验证产出了对 reviewer 有帮助的截图或视频，就必须将这些媒体上传到对应 Linear issue（优先 attachment），并在 workpad 中简要注明媒体覆盖的用户路径/场景。
 6. 再次核对所有验收标准，补齐任何缺口。
 7. 每次尝试 `git push` 之前，都必须运行当前 scope 所需的验证，并确认通过；若失败，则修复并反复重跑直到为绿色，然后再 commit 和 push。
@@ -278,7 +276,7 @@ agent 必须能够与 Linear 通信，可以通过已配置的 Linear MCP server
 - PR feedback sweep 已完成，且不存在任何未解决的可执行评论。
 - PR checks 为绿色，分支已推送，且 PR 已在 issue 上建立关联。
 - 必需的 PR 元数据已具备（`symphony` label）。
-- 如果改动触及 app，则 `App runtime validation (required)` 中的 runtime 验证/媒体要求已完成，且截图/视频已上传到对应 Linear issue。
+- 如果改动触及 dashboard、LiveView、HTTP API 或 pipeline 配置流，则相应的 runtime 验证/媒体要求已完成，且截图/视频已上传到对应 Linear issue。
 
 ## Guardrails
 

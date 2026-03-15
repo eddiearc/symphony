@@ -104,17 +104,16 @@ defmodule SymphonyElixir.Workflow do
 
   @spec default_pipeline_template() :: {:ok, loaded_workflow()} | {:error, term()}
   def default_pipeline_template do
-    repo_root = Path.expand("../../..", __DIR__)
+    {pipeline_config_path, workflow_path} = default_pipeline_template_paths()
 
-    case System.cmd("git", ["show", "main:elixir/WORKFLOW.md"],
-           cd: repo_root,
-           stderr_to_stdout: true
-         ) do
-      {content, 0} ->
-        parse_content(content)
-
-      {_output, _status} ->
-        load(Path.join(repo_root, "elixir/WORKFLOW.md"))
+    with {:ok, workflow} <- load(workflow_path),
+         {:ok, pipeline_config} <- read_pipeline_config(pipeline_config_path) do
+      {:ok,
+       %{
+         config: merge_template_config(pipeline_config, workflow.config),
+         prompt: workflow.prompt,
+         prompt_template: workflow.prompt_template
+       }}
     end
   end
 
@@ -198,6 +197,40 @@ defmodule SymphonyElixir.Workflow do
       end
     end
   end
+
+  defp default_pipeline_template_paths do
+    repo_root = Path.expand("../../..", __DIR__)
+    pipeline_dir = Path.join(repo_root, "elixir/pipelines/default")
+    {Path.join(pipeline_dir, "pipeline.yaml"), Path.join(pipeline_dir, @workflow_file_name)}
+  end
+
+  defp read_pipeline_config(path) when is_binary(path) do
+    with {:ok, content} <- File.read(path),
+         {:ok, parsed} <- YamlElixir.read_from_string(content),
+         true <- is_map(parsed) do
+      {:ok, parsed}
+    else
+      {:error, reason} when is_atom(reason) ->
+        {:error, {:missing_pipeline_config, path, reason}}
+
+      {:error, reason} ->
+        {:error, {:pipeline_config_parse_error, path, reason}}
+
+      false ->
+        {:error, {:pipeline_config_not_a_map, path}}
+    end
+  end
+
+  defp merge_template_config(%{} = pipeline_config, %{} = workflow_config) do
+    Map.merge(pipeline_config, workflow_config, fn _key, left, right ->
+      merge_template_config_value(left, right)
+    end)
+  end
+
+  defp merge_template_config_value(%{} = left, %{} = right),
+    do: merge_template_config(left, right)
+
+  defp merge_template_config_value(_left, right), do: right
 
   defp normalize_render_keys(value) when is_map(value) do
     Enum.reduce(value, %{}, fn {key, nested}, acc ->
