@@ -1,34 +1,3 @@
----
-tracker:
-  active_states: ["Todo", "In Progress", "Merging", "Rework"]
-  kind: "linear"
-  project_slug: "symphony-cb81294e364c"
-  terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
-polling:
-  interval_ms: 5000
-workspace:
-  root: "~/code/symphony-workspaces"
-agent:
-  max_concurrent_agents: 10
-  max_turns: 20
-codex:
-  approval_policy: "never"
-  command: "codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --model gpt-5.4 app-server"
-  thread_sandbox: "danger-full-access"
-  turn_sandbox_policy:
-    type: "dangerFullAccess"
-hooks:
-  after_create: |
-    git clone --depth 1 https://github.com/eddiearc/symphony .
-    if ! command -v mise >/dev/null 2>&1; then
-      echo "mise not found in PATH" >&2
-      exit 1
-    fi
-    cd elixir
-    mise trust
-    mise exec -- mix deps.get
----
-
 你正在处理 Linear 工单 `{{ issue.identifier }}`
 
 {% if attempt %}

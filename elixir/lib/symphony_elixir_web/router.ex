@@ -25,13 +25,24 @@ defmodule SymphonyElixirWeb.Router do
     pipe_through(:browser)
 
     live("/", DashboardLive, :index)
+    live("/panel/:panel", DashboardLive, :index)
   end
 
   scope "/", SymphonyElixirWeb do
     get("/api/v1/state", ObservabilityApiController, :state)
+    get("/api/v1/pipelines", ObservabilityApiController, :pipelines)
+    get("/api/v1/pipelines/:pipeline_id", ObservabilityApiController, :pipeline)
+    post("/api/v1/pipelines/:pipeline_id/refresh", ObservabilityApiController, :refresh_pipeline)
+    post("/api/v1/pipelines/:pipeline_id/pause", ObservabilityApiController, :pause_pipeline)
+    post("/api/v1/pipelines/:pipeline_id/resume", ObservabilityApiController, :resume_pipeline)
 
     match(:*, "/", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/state", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/pipelines", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/pipelines/:pipeline_id", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/pipelines/:pipeline_id/refresh", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/pipelines/:pipeline_id/pause", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/pipelines/:pipeline_id/resume", ObservabilityApiController, :method_not_allowed)
     post("/api/v1/refresh", ObservabilityApiController, :refresh)
     match(:*, "/api/v1/refresh", ObservabilityApiController, :method_not_allowed)
     get("/api/v1/:issue_identifier", ObservabilityApiController, :issue)

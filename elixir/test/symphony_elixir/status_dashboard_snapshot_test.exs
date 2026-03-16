@@ -194,6 +194,79 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
     Snapshot.assert_dashboard_snapshot!("credits_unlimited", render_snapshot(snapshot_data, 42.0))
   end
 
+  test "snapshot fixture: multi pipeline host dashboard" do
+    snapshot_data =
+      {:ok,
+       %{
+         pipelines: [
+           %{
+             id: "alpha",
+             project_slug: "alpha-project",
+             project_url: "https://linear.app/project/alpha-project/issues",
+             available: true,
+             paused: false,
+             running_agents: 1,
+             retrying_agents: 1,
+             polling: %{checking: false, next_poll_in_ms: 5_000, poll_interval_ms: 15_000}
+           },
+           %{
+             id: "beta",
+             project_slug: "beta-project",
+             project_url: "https://linear.app/project/beta-project/issues",
+             available: true,
+             paused: true,
+             running_agents: 0,
+             retrying_agents: 1,
+             polling: %{checking: false, next_poll_in_ms: nil, poll_interval_ms: 15_000}
+           }
+         ],
+         running: [
+           running_entry(%{
+             pipeline_id: "alpha",
+             identifier: "MT-201",
+             state: "In Progress",
+             codex_total_tokens: 24_500,
+             runtime_seconds: 315,
+             turn_count: 9,
+             last_codex_event: "turn_completed",
+             last_codex_message: turn_completed_message("completed")
+           })
+         ],
+         retrying: [
+           retry_entry(%{
+             pipeline_id: "alpha",
+             identifier: "MT-202",
+             attempt: 2,
+             due_in_ms: 2_500,
+             error: "waiting on review feedback"
+           }),
+           retry_entry(%{
+             pipeline_id: "beta",
+             identifier: "MT-203",
+             attempt: 1,
+             due_in_ms: 7_000,
+             error: "pipeline paused"
+           })
+         ],
+         codex_totals: %{input_tokens: 20_000, output_tokens: 4_500, total_tokens: 24_500, seconds_running: 315},
+         rate_limits: nil
+       }}
+
+    rendered = render_snapshot(snapshot_data, 88.0)
+    plain = Snapshot.strip_ansi(rendered)
+
+    assert plain =~ "Pipelines"
+    assert plain =~ "alpha"
+    assert plain =~ "beta"
+    assert plain =~ "alpha-project"
+    assert plain =~ "PIPELINE"
+    assert plain =~ "alpha      MT-201"
+    assert plain =~ "[beta] MT-203"
+    refute plain =~ "Project: "
+
+    Snapshot.assert_dashboard_snapshot!("multi_pipeline", rendered)
+  end
+
   defp render_snapshot(snapshot_data, tps) do
     StatusDashboard.format_snapshot_content_for_test(snapshot_data, tps, @terminal_columns)
   end

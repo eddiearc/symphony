@@ -40,15 +40,36 @@ defmodule SymphonyElixir.Linear.Adapter do
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues, do: client_module().fetch_candidate_issues()
 
+  @spec fetch_candidate_issues(map()) :: {:ok, [term()]} | {:error, term()}
+  def fetch_candidate_issues(pipeline) when is_map(pipeline),
+    do: client_module().fetch_candidate_issues(pipeline)
+
   @spec fetch_issues_by_states([String.t()]) :: {:ok, [term()]} | {:error, term()}
   def fetch_issues_by_states(states), do: client_module().fetch_issues_by_states(states)
+
+  @spec fetch_issues_by_states(map(), [String.t()]) :: {:ok, [term()]} | {:error, term()}
+  def fetch_issues_by_states(pipeline, states) when is_map(pipeline) and is_list(states),
+    do: client_module().fetch_issues_by_states(pipeline, states)
 
   @spec fetch_issue_states_by_ids([String.t()]) :: {:ok, [term()]} | {:error, term()}
   def fetch_issue_states_by_ids(issue_ids), do: client_module().fetch_issue_states_by_ids(issue_ids)
 
+  @spec fetch_issue_states_by_ids(map(), [String.t()]) :: {:ok, [term()]} | {:error, term()}
+  def fetch_issue_states_by_ids(pipeline, issue_ids) when is_map(pipeline) and is_list(issue_ids),
+    do: client_module().fetch_issue_states_by_ids(pipeline, issue_ids)
+
   @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
   def create_comment(issue_id, body) when is_binary(issue_id) and is_binary(body) do
-    with {:ok, response} <- client_module().graphql(@create_comment_mutation, %{issueId: issue_id, body: body}),
+    with {:ok, pipeline} <- SymphonyElixir.Config.current_pipeline() do
+      create_comment(pipeline, issue_id, body)
+    end
+  end
+
+  @spec create_comment(map(), String.t(), String.t()) :: :ok | {:error, term()}
+  def create_comment(pipeline, issue_id, body)
+      when is_map(pipeline) and is_binary(issue_id) and is_binary(body) do
+    with {:ok, response} <-
+           client_module().graphql(pipeline, @create_comment_mutation, %{issueId: issue_id, body: body}),
          true <- get_in(response, ["data", "commentCreate", "success"]) == true do
       :ok
     else
@@ -61,9 +82,17 @@ defmodule SymphonyElixir.Linear.Adapter do
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   def update_issue_state(issue_id, state_name)
       when is_binary(issue_id) and is_binary(state_name) do
-    with {:ok, state_id} <- resolve_state_id(issue_id, state_name),
+    with {:ok, pipeline} <- SymphonyElixir.Config.current_pipeline() do
+      update_issue_state(pipeline, issue_id, state_name)
+    end
+  end
+
+  @spec update_issue_state(map(), String.t(), String.t()) :: :ok | {:error, term()}
+  def update_issue_state(pipeline, issue_id, state_name)
+      when is_map(pipeline) and is_binary(issue_id) and is_binary(state_name) do
+    with {:ok, state_id} <- resolve_state_id(pipeline, issue_id, state_name),
          {:ok, response} <-
-           client_module().graphql(@update_state_mutation, %{issueId: issue_id, stateId: state_id}),
+           client_module().graphql(pipeline, @update_state_mutation, %{issueId: issue_id, stateId: state_id}),
          true <- get_in(response, ["data", "issueUpdate", "success"]) == true do
       :ok
     else
@@ -77,9 +106,9 @@ defmodule SymphonyElixir.Linear.Adapter do
     Application.get_env(:symphony_elixir, :linear_client_module, Client)
   end
 
-  defp resolve_state_id(issue_id, state_name) do
+  defp resolve_state_id(pipeline, issue_id, state_name) do
     with {:ok, response} <-
-           client_module().graphql(@state_lookup_query, %{issueId: issue_id, stateName: state_name}),
+           client_module().graphql(pipeline, @state_lookup_query, %{issueId: issue_id, stateName: state_name}),
          state_id when is_binary(state_id) <-
            get_in(response, ["data", "issue", "team", "states", "nodes", Access.at(0), "id"]) do
       {:ok, state_id}

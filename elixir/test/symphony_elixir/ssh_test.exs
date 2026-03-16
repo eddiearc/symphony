@@ -151,7 +151,8 @@ defmodule SymphonyElixir.SSHTest do
 
     assert {:ok, port} = SSH.start_port("localhost:2222", "printf ok", line: 256)
     assert is_port(port)
-    wait_for_trace!(trace_file)
+    assert_receive {^port, {:data, {:eol, "ready"}}}, 1_000
+    wait_for_trace!(trace_file, 100)
 
     trace = File.read!(trace_file)
     assert trace =~ "-T -p 2222 localhost bash -lc"

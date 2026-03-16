@@ -14,7 +14,15 @@ defmodule SymphonyElixir.CoreTest do
     config = Config.settings!()
     assert config.polling.interval_ms == 30_000
     assert config.tracker.active_states == ["Todo", "In Progress"]
-    assert config.tracker.terminal_states == ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+
+    assert config.tracker.terminal_states == [
+             "Closed",
+             "Cancelled",
+             "Canceled",
+             "Duplicate",
+             "Done"
+           ]
+
     assert config.tracker.assignee == nil
     assert config.agent.max_turns == 20
 
@@ -24,21 +32,21 @@ defmodule SymphonyElixir.CoreTest do
       Config.settings!().polling.interval_ms
     end
 
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert {:error, {:invalid_pipeline_config, message}} = Config.validate!()
     assert message =~ "polling.interval_ms"
 
     write_workflow_file!(Workflow.workflow_file_path(), poll_interval_ms: 45_000)
     assert Config.settings!().polling.interval_ms == 45_000
 
     write_workflow_file!(Workflow.workflow_file_path(), max_turns: 0)
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert {:error, {:invalid_pipeline_config, message}} = Config.validate!()
     assert message =~ "agent.max_turns"
 
     write_workflow_file!(Workflow.workflow_file_path(), max_turns: 5)
     assert Config.settings!().agent.max_turns == 5
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: "Todo,  Review,")
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert {:error, {:invalid_pipeline_config, message}} = Config.validate!()
     assert message =~ "tracker.active_states"
 
     write_workflow_file!(Workflow.workflow_file_path(),
@@ -53,7 +61,7 @@ defmodule SymphonyElixir.CoreTest do
       codex_command: ""
     )
 
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert {:error, {:invalid_pipeline_config, message}} = Config.validate!()
     assert message =~ "codex.command"
     assert message =~ "can't be blank"
 
@@ -64,7 +72,10 @@ defmodule SymphonyElixir.CoreTest do
     write_workflow_file!(Workflow.workflow_file_path(), codex_command: "/bin/sh app-server")
     assert :ok = Config.validate!()
 
-    write_workflow_file!(Workflow.workflow_file_path(), codex_approval_policy: "definitely-not-valid")
+    write_workflow_file!(Workflow.workflow_file_path(),
+      codex_approval_policy: "definitely-not-valid"
+    )
+
     assert :ok = Config.validate!()
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_thread_sandbox: "unsafe-ish")
@@ -77,42 +88,220 @@ defmodule SymphonyElixir.CoreTest do
     assert :ok = Config.validate!()
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_approval_policy: 123)
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert {:error, {:invalid_pipeline_config, message}} = Config.validate!()
     assert message =~ "codex.approval_policy"
 
     write_workflow_file!(Workflow.workflow_file_path(), codex_thread_sandbox: 123)
-    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert {:error, {:invalid_pipeline_config, message}} = Config.validate!()
     assert message =~ "codex.thread_sandbox"
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "123")
     assert {:error, {:unsupported_tracker_kind, "123"}} = Config.validate!()
   end
 
-  test "current WORKFLOW.md file is valid and complete" do
-    original_workflow_path = Workflow.workflow_file_path()
-    on_exit(fn -> Workflow.set_workflow_file_path(original_workflow_path) end)
-    Workflow.clear_workflow_file_path()
+  test "pipeline parse accepts pipeline-scoped runtime sections" do
+    pipeline_config = %{
+      "id" => "workcow",
+      "enabled" => true,
+      "source_path" => "/tmp/pipelines/workcow",
+      "workflow_path" => "/tmp/pipelines/workcow/WORKFLOW.md",
+      "prompt_template" => "Pipeline prompt",
+      "tracker" => %{
+        "kind" => "linear",
+        "api_key" => "token-a",
+        "project_slug" => "project-a",
+        "active_states" => ["Todo", "In Progress"],
+        "terminal_states" => ["Done", "Canceled"]
+      },
+      "workspace" => %{
+        "root" => "/tmp/workspaces-a"
+      },
+      "agent" => %{
+        "max_concurrent_agents" => 2,
+        "max_turns" => 3
+      },
+      "codex" => %{
+        "command" => "codex app-server"
+      },
+      "hooks" => %{
+        "after_create" => "echo bootstrap"
+      }
+    }
 
-    assert {:ok, %{config: config, prompt: prompt}} = Workflow.load()
+    assert {:ok, pipeline} = SymphonyElixir.Pipeline.parse(pipeline_config)
+    assert pipeline.id == "workcow"
+    assert pipeline.enabled == true
+    assert pipeline.source_path == "/tmp/pipelines/workcow"
+    assert pipeline.workflow_path == "/tmp/pipelines/workcow/WORKFLOW.md"
+    assert pipeline.prompt_template == "Pipeline prompt"
+    assert pipeline.tracker.project_slug == "project-a"
+    assert pipeline.workspace.root == "/tmp/workspaces-a"
+    assert pipeline.agent.max_concurrent_agents == 2
+    assert pipeline.agent.max_turns == 3
+    assert pipeline.hooks.after_create == "echo bootstrap"
+  end
+
+  test "pipeline validation checks project scope per pipeline" do
+    assert {:ok, valid_pipeline} =
+             SymphonyElixir.Pipeline.parse(%{
+               "id" => "project-a",
+               "tracker" => %{
+                 "kind" => "linear",
+                 "api_key" => "token-a",
+                 "project_slug" => "project-a"
+               }
+             })
+
+    assert {:ok, missing_slug_pipeline} =
+             SymphonyElixir.Pipeline.parse(%{
+               "id" => "project-b",
+               "tracker" => %{
+                 "kind" => "linear",
+                 "api_key" => "token-b",
+                 "project_slug" => nil
+               }
+             })
+
+    assert :ok = Config.validate_pipeline(valid_pipeline)
+
+    assert {:error, :missing_linear_project_slug} =
+             Config.validate_pipeline(missing_slug_pipeline)
+  end
+
+  test "config loads the primary enabled pipeline from the pipeline root" do
+    workflow_path = Workflow.workflow_file_path()
+
+    write_workflow_file!(workflow_path,
+      tracker_project_slug: "pipeline-project",
+      prompt: "Pipeline prompt template"
+    )
+
+    assert {:ok, pipeline} = Config.current_pipeline()
+    assert pipeline.id == "default"
+    assert pipeline.source_path == Path.dirname(workflow_path)
+    assert pipeline.workflow_path == workflow_path
+    assert pipeline.prompt_template == "Pipeline prompt template"
+    assert pipeline.tracker.project_slug == "pipeline-project"
+  end
+
+  test "host settings fall back to the first configured pipeline when all pipelines are disabled" do
+    workflow_path = Workflow.workflow_file_path()
+
+    write_workflow_file!(workflow_path,
+      enabled: false,
+      tracker_project_slug: "disabled-project",
+      observability_refresh_ms: 2_500,
+      server_host: "0.0.0.0"
+    )
+
+    assert {:error, :no_enabled_pipelines} = Config.current_pipeline()
+
+    assert {:ok, settings} = Config.host_settings()
+    assert settings.tracker.project_slug == "disabled-project"
+    assert settings.observability.refresh_ms == 2_500
+    assert settings.server.host == "0.0.0.0"
+  end
+
+  test "pipeline loader reads pipelines directory layout" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-pipeline-loader-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      pipelines_root = Path.join(root, "pipelines")
+      workcow_dir = Path.join(pipelines_root, "workcow")
+      repo_b_dir = Path.join(pipelines_root, "repo-b")
+
+      File.mkdir_p!(workcow_dir)
+      File.mkdir_p!(repo_b_dir)
+
+      File.write!(
+        Path.join(workcow_dir, "pipeline.yaml"),
+        """
+        id: "workcow"
+        enabled: true
+        tracker:
+          kind: "linear"
+          api_key: "token-a"
+          project_slug: "workcow-project"
+        """
+      )
+
+      File.write!(Path.join(workcow_dir, "WORKFLOW.md"), "Workcow prompt\n")
+
+      File.write!(
+        Path.join(repo_b_dir, "pipeline.yaml"),
+        """
+        id: "repo-b"
+        enabled: false
+        tracker:
+          kind: "linear"
+          api_key: "token-b"
+          project_slug: "repo-b-project"
+        """
+      )
+
+      File.write!(Path.join(repo_b_dir, "WORKFLOW.md"), "Repo B prompt\n")
+
+      assert {:ok, pipelines} = SymphonyElixir.PipelineLoader.load(pipelines_root)
+      assert Enum.map(pipelines, & &1.id) == ["repo-b", "workcow"]
+
+      assert workcow = Enum.find(pipelines, &(&1.id == "workcow"))
+      assert workcow.workflow_path == Path.join(workcow_dir, "WORKFLOW.md")
+      assert workcow.source_path == workcow_dir
+      assert workcow.prompt_template == "Workcow prompt"
+      assert workcow.enabled == true
+
+      assert repo_b = Enum.find(pipelines, &(&1.id == "repo-b"))
+      assert repo_b.workflow_path == Path.join(repo_b_dir, "WORKFLOW.md")
+      assert repo_b.source_path == repo_b_dir
+      assert repo_b.prompt_template == "Repo B prompt"
+      assert repo_b.enabled == false
+    after
+      File.rm_rf(root)
+    end
+  end
+
+  test "pipeline loader rejects explicit workflow file paths" do
+    workflow_path = Workflow.workflow_file_path()
+
+    write_workflow_file!(workflow_path,
+      tracker_project_slug: "legacy-project",
+      prompt: "Legacy prompt template"
+    )
+
+    assert {:error, {:missing_pipeline_path, ^workflow_path}} =
+             SymphonyElixir.PipelineLoader.load(workflow_path)
+  end
+
+  test "default scaffold workflow template is valid and complete" do
+    assert {:ok, %{config: config, prompt: prompt}} = Workflow.default_pipeline_template()
     assert is_map(config)
+
+    assert Map.get(config, "id") == "default"
+    assert Map.get(config, "enabled") == true
 
     tracker = Map.get(config, "tracker", %{})
     assert is_map(tracker)
     assert Map.get(tracker, "kind") == "linear"
-    assert is_binary(Map.get(tracker, "project_slug"))
+    assert Map.get(tracker, "project_slug") == "symphony-cb81294e364c"
     assert is_list(Map.get(tracker, "active_states"))
     assert is_list(Map.get(tracker, "terminal_states"))
 
     hooks = Map.get(config, "hooks", %{})
     assert is_map(hooks)
-    assert Map.get(hooks, "after_create") =~ "git clone --depth 1 https://github.com/openai/symphony ."
-    assert Map.get(hooks, "after_create") =~ "cd elixir && mise trust"
+
+    assert Map.get(hooks, "after_create") =~
+             "git clone --depth 1 https://github.com/eddiearc/symphony ."
+
+    assert Map.get(hooks, "after_create") =~ "mise trust"
     assert Map.get(hooks, "after_create") =~ "mise exec -- mix deps.get"
-    assert Map.get(hooks, "before_remove") =~ "cd elixir && mise exec -- mix workspace.before_remove"
 
     assert String.trim(prompt) != ""
-    assert is_binary(Config.workflow_prompt())
-    assert Config.workflow_prompt() == prompt
+    assert prompt =~ "你正在处理 Linear 工单 `{{ issue.identifier }}`"
+    assert prompt =~ "这是一次无人值守的编排会话"
   end
 
   test "linear api token resolves from LINEAR_API_KEY env var" do
@@ -149,16 +338,19 @@ defmodule SymphonyElixir.CoreTest do
     assert Config.settings!().tracker.assignee == env_assignee
   end
 
-  test "workflow file path defaults to WORKFLOW.md in the current working directory when app env is unset" do
+  test "workflow file path defaults to the default pipeline under the pipeline root" do
     original_workflow_path = Workflow.workflow_file_path()
+    original_pipeline_root_path = Workflow.pipeline_root_path()
 
     on_exit(fn ->
       Workflow.set_workflow_file_path(original_workflow_path)
+      Workflow.set_pipeline_root_path(original_pipeline_root_path)
     end)
 
+    Workflow.set_pipeline_root_path("/tmp/app/pipelines")
     Workflow.clear_workflow_file_path()
 
-    assert Workflow.workflow_file_path() == Path.join(File.cwd!(), "WORKFLOW.md")
+    assert Workflow.workflow_file_path() == "/tmp/app/pipelines/default/WORKFLOW.md"
   end
 
   test "workflow file path resolves from app env when set" do
@@ -174,7 +366,9 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "workflow load accepts prompt-only files without front matter" do
-    workflow_path = Path.join(Path.dirname(Workflow.workflow_file_path()), "PROMPT_ONLY_WORKFLOW.md")
+    workflow_path =
+      Path.join(Path.dirname(Workflow.workflow_file_path()), "PROMPT_ONLY_WORKFLOW.md")
+
     File.write!(workflow_path, "Prompt only\n")
 
     assert {:ok, %{config: %{}, prompt: "Prompt only", prompt_template: "Prompt only"}} =
@@ -182,7 +376,9 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "workflow load accepts unterminated front matter with an empty prompt" do
-    workflow_path = Path.join(Path.dirname(Workflow.workflow_file_path()), "UNTERMINATED_WORKFLOW.md")
+    workflow_path =
+      Path.join(Path.dirname(Workflow.workflow_file_path()), "UNTERMINATED_WORKFLOW.md")
+
     File.write!(workflow_path, "---\ntracker:\n  kind: linear\n")
 
     assert {:ok, %{config: %{"tracker" => %{"kind" => "linear"}}, prompt: "", prompt_template: ""}} =
@@ -190,10 +386,89 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "workflow load rejects non-map front matter" do
-    workflow_path = Path.join(Path.dirname(Workflow.workflow_file_path()), "INVALID_FRONT_MATTER_WORKFLOW.md")
+    workflow_path =
+      Path.join(Path.dirname(Workflow.workflow_file_path()), "INVALID_FRONT_MATTER_WORKFLOW.md")
+
     File.write!(workflow_path, "---\n- not-a-map\n---\nPrompt body\n")
 
     assert {:error, :workflow_front_matter_not_a_map} = Workflow.load(workflow_path)
+  end
+
+  test "workflow raw_content, parse_content, validate_content, and save support structured editing" do
+    workflow_path = Workflow.workflow_file_path()
+
+    rendered_workflow =
+      Workflow.render_content(
+        %{
+          "custom" => %{
+            "quoted" => "say \"hi\" \\\\ path"
+          },
+          tracker: %{
+            kind: "linear",
+            project_slug: "structured-project",
+            active_states: ["Todo", "In Progress"],
+            terminal_states: [],
+            samples: [true, false, nil, 1, 1.5, "ready"],
+            detail_blocks: [
+              %{label: "alpha", enabled: true, notes: "line 1\nline 2\n"},
+              ["nested", 2],
+              :atom_token
+            ]
+          },
+          hooks: %{
+            after_create: "pnpm install\npnpm test\n",
+            before_remove: nil,
+            extras: %{}
+          }
+        },
+        "结构化提示\n第二行\n"
+      )
+
+    assert rendered_workflow =~ "---\ntracker:\n"
+    assert rendered_workflow =~ "terminal_states: []"
+    assert rendered_workflow =~ "samples: [true, false, null, 1, 1.500000, \"ready\"]"
+    assert rendered_workflow =~ "after_create: |\n    pnpm install\n    pnpm test"
+    assert rendered_workflow =~ "extras:\n    {}"
+    assert rendered_workflow =~ "\"say \\\"hi\\\" \\\\\\\\ path\""
+    assert String.ends_with?(rendered_workflow, "结构化提示\n第二行\n")
+
+    assert {:ok, existing_workflow} = Workflow.raw_content(workflow_path)
+    assert existing_workflow != rendered_workflow
+
+    assert {:ok, %{prompt: "Prompt only", prompt_template: "Prompt only", config: %{}}} =
+             Workflow.parse_content("Prompt only\n")
+
+    assert :ok = Workflow.validate_content(rendered_workflow)
+    assert :ok = Workflow.save(rendered_workflow)
+    assert {:ok, ^rendered_workflow} = Workflow.raw_content()
+
+    assert {:ok, loaded_workflow} = Workflow.load(workflow_path)
+    assert get_in(loaded_workflow, [:config, "tracker", "project_slug"]) == "structured-project"
+    assert get_in(loaded_workflow, [:config, "tracker", "terminal_states"]) == []
+
+    assert get_in(loaded_workflow, [:config, "tracker", "samples"]) == [
+             true,
+             false,
+             nil,
+             1,
+             1.5,
+             "ready"
+           ]
+
+    assert get_in(loaded_workflow, [:config, "hooks", "extras"]) == %{}
+    assert loaded_workflow.prompt == "结构化提示\n第二行"
+    assert loaded_workflow.prompt_template == "结构化提示\n第二行"
+  end
+
+  test "workflow validate_content and raw_content surface parse and missing-file errors" do
+    missing_path =
+      Path.join(Path.dirname(Workflow.workflow_file_path()), "MISSING_RAW_WORKFLOW.md")
+
+    assert {:error, {:missing_workflow_file, ^missing_path, :enoent}} =
+             Workflow.raw_content(missing_path)
+
+    assert {:error, {:workflow_parse_error, _reason}} =
+             Workflow.validate_content("---\ntracker: [\n---\nBroken\n")
   end
 
   test "SymphonyElixir.start_link delegates to the orchestrator" do
@@ -211,7 +486,8 @@ defmodule SymphonyElixir.CoreTest do
     end)
 
     if is_pid(orchestrator_pid) do
-      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.Orchestrator)
+      assert :ok =
+               Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.Orchestrator)
     end
 
     assert {:ok, pid} = SymphonyElixir.start_link()
@@ -220,8 +496,136 @@ defmodule SymphonyElixir.CoreTest do
     GenServer.stop(pid)
   end
 
+  test "pipeline supervisor starts the default configured pipeline from the pipeline root" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
+
+    supervisor_name = Module.concat(__MODULE__, :LegacyPipelineSupervisor)
+    registry_name = Module.concat(__MODULE__, :LegacyPipelineRegistry)
+
+    {:ok, supervisor_pid} =
+      SymphonyElixir.PipelineSupervisor.start_link(
+        name: supervisor_name,
+        registry_name: registry_name
+      )
+
+    on_exit(fn ->
+      if Process.alive?(supervisor_pid) do
+        Process.exit(supervisor_pid, :normal)
+      end
+    end)
+
+    assert {:ok, pid} = wait_for_pipeline_lookup(registry_name, "default")
+    assert is_pid(pid)
+  end
+
   test "linear issue state reconciliation fetch with no running issues is a no-op" do
-    assert {:ok, []} = Client.fetch_issue_states_by_ids([])
+    assert {:ok, pipeline} =
+             SymphonyElixir.Pipeline.parse(%{
+               "id" => "core-linear",
+               "tracker" => %{
+                 "kind" => "linear",
+                 "api_key" => "token",
+                 "project_slug" => "core-project"
+               }
+             })
+
+    assert {:ok, []} = Client.fetch_issue_states_by_ids(pipeline, [])
+  end
+
+  test "linear client normalization includes pipeline metadata for observability" do
+    issue =
+      Client.normalize_issue_for_test(
+        %{
+          "id" => "issue-1",
+          "identifier" => "MT-1",
+          "title" => "Pipeline metadata",
+          "description" => "details",
+          "priority" => 2,
+          "state" => %{"name" => "In Progress"},
+          "branchName" => "feat/pipeline-metadata",
+          "url" => "https://linear.app/example/issue/MT-1",
+          "assignee" => %{"id" => "assignee-1"},
+          "labels" => %{"nodes" => [%{"name" => "Bug"}]},
+          "inverseRelations" => %{"nodes" => []},
+          "createdAt" => "2026-03-14T00:00:00Z",
+          "updatedAt" => "2026-03-14T00:01:00Z"
+        },
+        nil,
+        "pipeline-a"
+      )
+
+    assert %Issue{pipeline_id: "pipeline-a"} = issue
+  end
+
+  test "linear client candidate queries remain isolated per pipeline project slug" do
+    assert {:ok, pipeline_a} =
+             SymphonyElixir.Pipeline.parse(%{
+               "id" => "pipeline-a",
+               "tracker" => %{
+                 "kind" => "linear",
+                 "api_key" => "token-a",
+                 "project_slug" => "project-a",
+                 "active_states" => ["Todo"]
+               }
+             })
+
+    assert {:ok, pipeline_b} =
+             SymphonyElixir.Pipeline.parse(%{
+               "id" => "pipeline-b",
+               "tracker" => %{
+                 "kind" => "linear",
+                 "api_key" => "token-b",
+                 "project_slug" => "project-b",
+                 "active_states" => ["Todo"]
+               }
+             })
+
+    graphql_fun = fn _query, variables ->
+      send(self(), {:graphql_project_slug, variables[:projectSlug]})
+
+      issue_id =
+        case variables[:projectSlug] do
+          "project-a" -> "issue-a"
+          "project-b" -> "issue-b"
+          _ -> "issue-unknown"
+        end
+
+      {:ok,
+       %{
+         "data" => %{
+           "issues" => %{
+             "nodes" => [
+               %{
+                 "id" => issue_id,
+                 "identifier" => String.upcase(issue_id),
+                 "title" => "Title #{issue_id}",
+                 "description" => "Description #{issue_id}",
+                 "priority" => 2,
+                 "state" => %{"name" => "Todo"},
+                 "branchName" => nil,
+                 "url" => nil,
+                 "assignee" => nil,
+                 "labels" => %{"nodes" => []},
+                 "inverseRelations" => %{"nodes" => []},
+                 "createdAt" => nil,
+                 "updatedAt" => nil
+               }
+             ],
+             "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+           }
+         }
+       }}
+    end
+
+    assert {:ok, [%Issue{id: "issue-a", pipeline_id: "pipeline-a"}]} =
+             Client.fetch_candidate_issues_for_test(pipeline_a, graphql_fun)
+
+    assert {:ok, [%Issue{id: "issue-b", pipeline_id: "pipeline-b"}]} =
+             Client.fetch_candidate_issues_for_test(pipeline_b, graphql_fun)
+
+    assert_received {:graphql_project_slug, "project-a"}
+    assert_received {:graphql_project_slug, "project-b"}
   end
 
   test "non-active issue state stops running agent without cleaning workspace" do
@@ -549,9 +953,11 @@ defmodule SymphonyElixir.CoreTest do
 
     refute Map.has_key?(state.running, issue_id)
     assert MapSet.member?(state.completed, issue_id)
-    assert %{attempt: 1, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
-    assert is_integer(due_at_ms)
-    assert_due_in_range(due_at_ms, 500, 1_100)
+
+    assert %{attempt: 1, due_at_ms: due_at_ms, scheduled_at_ms: scheduled_at_ms} =
+             state.retry_attempts[issue_id]
+
+    assert_retry_delay(due_at_ms, scheduled_at_ms, 1_000)
   end
 
   test "abnormal worker exit increments retry attempt progressively" do
@@ -588,10 +994,16 @@ defmodule SymphonyElixir.CoreTest do
     Process.sleep(50)
     state = :sys.get_state(pid)
 
-    assert %{attempt: 3, due_at_ms: due_at_ms, identifier: "MT-559", error: "agent exited: :boom"} =
+    assert %{
+             attempt: 3,
+             due_at_ms: due_at_ms,
+             scheduled_at_ms: scheduled_at_ms,
+             identifier: "MT-559",
+             error: "agent exited: :boom"
+           } =
              state.retry_attempts[issue_id]
 
-    assert_due_in_range(due_at_ms, 39_500, 40_500)
+    assert_retry_delay(due_at_ms, scheduled_at_ms, 40_000)
   end
 
   test "first abnormal worker exit waits before retrying" do
@@ -627,10 +1039,16 @@ defmodule SymphonyElixir.CoreTest do
     Process.sleep(50)
     state = :sys.get_state(pid)
 
-    assert %{attempt: 1, due_at_ms: due_at_ms, identifier: "MT-560", error: "agent exited: :boom"} =
+    assert %{
+             attempt: 1,
+             due_at_ms: due_at_ms,
+             scheduled_at_ms: scheduled_at_ms,
+             identifier: "MT-560",
+             error: "agent exited: :boom"
+           } =
              state.retry_attempts[issue_id]
 
-    assert_due_in_range(due_at_ms, 9_000, 10_500)
+    assert_retry_delay(due_at_ms, scheduled_at_ms, 10_000)
   end
 
   test "stale retry timer messages do not consume newer retry entries" do
@@ -700,7 +1118,15 @@ defmodule SymphonyElixir.CoreTest do
              Orchestrator.handle_call(:request_refresh, {self(), make_ref()}, refreshed_state)
 
     assert coalesced_state.tick_token == refreshed_state.tick_token
-    assert {:noreply, ^coalesced_state} = Orchestrator.handle_info({:tick, stale_tick_token}, coalesced_state)
+
+    assert {:noreply, ^coalesced_state} =
+             Orchestrator.handle_info({:tick, stale_tick_token}, coalesced_state)
+  end
+
+  defp assert_retry_delay(due_at_ms, scheduled_at_ms, expected_delay_ms) do
+    assert is_integer(due_at_ms)
+    assert is_integer(scheduled_at_ms)
+    assert due_at_ms - scheduled_at_ms == expected_delay_ms
   end
 
   test "select_worker_host_for_test skips full ssh hosts under the shared per-host cap" do
@@ -787,7 +1213,8 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "prompt builder renders issue datetime fields without crashing" do
-    workflow_prompt = "Ticket {{ issue.identifier }} created={{ issue.created_at }} updated={{ issue.updated_at }}"
+    workflow_prompt =
+      "Ticket {{ issue.identifier }} created={{ issue.created_at }} updated={{ issue.updated_at }}"
 
     write_workflow_file!(Workflow.workflow_file_path(), prompt: workflow_prompt)
 
@@ -913,20 +1340,13 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "prompt builder reports workflow load failures separately from template parse errors" do
-    original_workflow_path = Workflow.workflow_file_path()
-    workflow_store_pid = Process.whereis(SymphonyElixir.WorkflowStore)
+    original_pipeline_root_path = Workflow.pipeline_root_path()
 
     on_exit(fn ->
-      Workflow.set_workflow_file_path(original_workflow_path)
-
-      if is_pid(workflow_store_pid) and is_nil(Process.whereis(SymphonyElixir.WorkflowStore)) do
-        Supervisor.restart_child(SymphonyElixir.Supervisor, SymphonyElixir.WorkflowStore)
-      end
+      Workflow.set_pipeline_root_path(original_pipeline_root_path)
     end)
 
-    assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.WorkflowStore)
-
-    Workflow.set_workflow_file_path(Path.join(System.tmp_dir!(), "missing-workflow-#{System.unique_integer([:positive])}.md"))
+    Workflow.set_pipeline_root_path(Path.join(System.tmp_dir!(), "missing-pipelines-#{System.unique_integer([:positive])}"))
 
     issue = %Issue{
       identifier: "MT-780",
@@ -943,9 +1363,6 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "in-repo WORKFLOW.md renders correctly" do
-    workflow_path = Workflow.workflow_file_path()
-    Workflow.set_workflow_file_path(Path.expand("WORKFLOW.md", File.cwd!()))
-
     issue = %Issue{
       identifier: "MT-616",
       title: "Use rich templates for WORKFLOW.md",
@@ -955,23 +1372,24 @@ defmodule SymphonyElixir.CoreTest do
       labels: ["templating", "workflow"]
     }
 
-    on_exit(fn -> Workflow.set_workflow_file_path(workflow_path) end)
+    assert {:ok, workflow} = Workflow.default_pipeline_template()
 
-    prompt = PromptBuilder.build_prompt(issue, attempt: 2)
+    assert {:ok, pipeline} =
+             SymphonyElixir.Pipeline.from_workflow(workflow, default_id: "default")
 
-    assert prompt =~ "You are working on a Linear ticket `MT-616`"
-    assert prompt =~ "Issue context:"
-    assert prompt =~ "Identifier: MT-616"
-    assert prompt =~ "Title: Use rich templates for WORKFLOW.md"
-    assert prompt =~ "Current status: In Progress"
+    prompt = PromptBuilder.build_prompt(pipeline, issue, attempt: 2)
+
+    assert prompt =~ "你正在处理 Linear 工单 `MT-616`"
+    assert prompt =~ "工单上下文："
+    assert prompt =~ "标识：MT-616"
+    assert prompt =~ "标题：Use rich templates for WORKFLOW.md"
+    assert prompt =~ "当前状态：In Progress"
     assert prompt =~ "https://example.org/issues/MT-616/use-rich-templates-for-workflowmd"
-    assert prompt =~ "This is an unattended orchestration session."
-    assert prompt =~ "Only stop early for a true blocker"
-    assert prompt =~ "Do not include \"next steps for user\""
-    assert prompt =~ "open and follow `.codex/skills/land/SKILL.md`"
-    assert prompt =~ "Do not call `gh pr merge` directly"
-    assert prompt =~ "Continuation context:"
-    assert prompt =~ "retry attempt #2"
+    assert prompt =~ "这是一次无人值守的编排会话"
+    assert prompt =~ "只有在出现真正阻塞时才可以提前停止"
+    assert prompt =~ "不要包含“给用户的下一步”"
+    assert prompt =~ "这是第 #2 次重试"
+    assert prompt =~ "## 前提条件：可使用 Linear MCP 或 `linear_graphql` 工具"
   end
 
   test "prompt builder adds continuation guidance for retries" do
@@ -1744,6 +2162,26 @@ defmodule SymphonyElixir.CoreTest do
              end)
     after
       File.rm_rf(test_root)
+    end
+  end
+
+  defp wait_for_pipeline_lookup(registry_name, pipeline_id, timeout_ms \\ 200) do
+    deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_pipeline_lookup(registry_name, pipeline_id, deadline_ms)
+  end
+
+  defp do_wait_for_pipeline_lookup(registry_name, pipeline_id, deadline_ms) do
+    case SymphonyElixir.PipelineSupervisor.lookup(pipeline_id, registry_name) do
+      {:ok, pid} when is_pid(pid) ->
+        {:ok, pid}
+
+      _ ->
+        if System.monotonic_time(:millisecond) >= deadline_ms do
+          flunk("timed out waiting for legacy pipeline orchestrator #{pipeline_id}")
+        else
+          Process.sleep(5)
+          do_wait_for_pipeline_lookup(registry_name, pipeline_id, deadline_ms)
+        end
     end
   end
 end

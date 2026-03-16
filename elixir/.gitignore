@@ -12,6 +12,7 @@
 
 # Temporary files, for example, from tests.
 /tmp/
+/test-results/
 
 # Generated browser assets.
 /priv/static/assets/

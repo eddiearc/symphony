@@ -3,29 +3,34 @@ defmodule SymphonyElixir.PromptBuilder do
   Builds agent prompts from Linear issue data.
   """
 
-  alias SymphonyElixir.{Config, Workflow}
+  alias SymphonyElixir.Config
 
   @render_opts [strict_variables: true, strict_filters: true]
 
   @spec build_prompt(SymphonyElixir.Linear.Issue.t(), keyword()) :: String.t()
   def build_prompt(issue, opts \\ []) do
     template =
-      Workflow.current()
+      case Config.current_pipeline() do
+        {:ok, pipeline} -> pipeline
+        {:error, reason} -> {:error, reason}
+      end
       |> prompt_template!()
       |> parse_template!()
 
-    template
-    |> Solid.render!(
-      %{
-        "attempt" => Keyword.get(opts, :attempt),
-        "issue" => issue |> Map.from_struct() |> to_solid_map()
-      },
-      @render_opts
-    )
-    |> IO.iodata_to_binary()
+    render_prompt(template, issue, opts)
   end
 
-  defp prompt_template!({:ok, %{prompt_template: prompt}}), do: default_prompt(prompt)
+  @spec build_prompt(map(), SymphonyElixir.Linear.Issue.t(), keyword()) :: String.t()
+  def build_prompt(%{} = pipeline, issue, opts) when is_list(opts) do
+    template =
+      pipeline
+      |> prompt_template!()
+      |> parse_template!()
+
+    render_prompt(template, issue, opts)
+  end
+
+  defp prompt_template!(%{prompt_template: prompt}), do: pipeline_prompt(prompt)
 
   defp prompt_template!({:error, reason}) do
     raise RuntimeError, "workflow_unavailable: #{inspect(reason)}"
@@ -54,9 +59,29 @@ defmodule SymphonyElixir.PromptBuilder do
   defp to_solid_value(value) when is_list(value), do: Enum.map(value, &to_solid_value/1)
   defp to_solid_value(value), do: value
 
+  defp render_prompt(template, issue, opts) do
+    template
+    |> Solid.render!(
+      %{
+        "attempt" => Keyword.get(opts, :attempt),
+        "issue" => issue |> Map.from_struct() |> to_solid_map()
+      },
+      @render_opts
+    )
+    |> IO.iodata_to_binary()
+  end
+
   defp default_prompt(prompt) when is_binary(prompt) do
     if String.trim(prompt) == "" do
       Config.workflow_prompt()
+    else
+      prompt
+    end
+  end
+
+  defp pipeline_prompt(prompt) when is_binary(prompt) do
+    if String.trim(prompt) == "" do
+      default_prompt("")
     else
       prompt
     end

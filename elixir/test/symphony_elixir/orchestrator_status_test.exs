@@ -465,7 +465,200 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     )
 
     snapshot = GenServer.call(pid, :snapshot)
-    assert snapshot.rate_limits == rate_limits
+
+    assert snapshot.rate_limits == %{
+             limit_id: "codex",
+             primary: %{remaining: 90, limit: 100},
+             credits: %{has_credits: false, unlimited: false, balance: nil}
+           }
+  end
+
+  test "orchestrator snapshot normalizes token_count rate limits without a limit identifier" do
+    issue_id = "issue-rate-limit-no-id"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-221A",
+      title: "Rate limit snapshot test without limit id",
+      description: "Capture codex rate limit state without identifiers",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-221A"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :RateLimitWithoutIdentifierOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+    process_ref = make_ref()
+    started_at = DateTime.utc_now()
+
+    running_entry = %{
+      pid: self(),
+      ref: process_ref,
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: nil,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      codex_last_reported_input_tokens: 0,
+      codex_last_reported_output_tokens: 0,
+      codex_last_reported_total_tokens: 0,
+      started_at: started_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         payload: %{
+           "method" => "codex/event/token_count",
+           "params" => %{
+             "msg" => %{
+               "type" => "event_msg",
+               "payload" => %{
+                 "type" => "token_count",
+                 "rate_limits" => %{
+                   "plan_type" => "priority",
+                   "primary" => %{
+                     "used_percent" => 52.0,
+                     "window_minutes" => 300,
+                     "resets_at" => 1_772_989_880
+                   },
+                   "secondary" => %{
+                     "used_percent" => 66.0,
+                     "window_minutes" => 10_080,
+                     "resets_at" => 1_773_468_681
+                   },
+                   "credits" => %{
+                     "has_credits" => false,
+                     "unlimited" => false,
+                     "balance" => nil
+                   }
+                 }
+               }
+             }
+           }
+         },
+         timestamp: DateTime.utc_now()
+       }}
+    )
+
+    snapshot = GenServer.call(pid, :snapshot)
+
+    assert snapshot.rate_limits == %{
+             plan_type: "priority",
+             primary: %{used_percent: 52.0, window_minutes: 300, resets_at: 1_772_989_880},
+             secondary: %{used_percent: 66.0, window_minutes: 10_080, resets_at: 1_773_468_681},
+             credits: %{has_credits: false, unlimited: false, balance: nil}
+           }
+  end
+
+  test "orchestrator snapshot normalizes account rate limits updated payloads" do
+    issue_id = "issue-rate-limit-account-update"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-221B",
+      title: "Account rate limit update test",
+      description: "Capture account/rateLimits/updated payloads",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-221B"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :AccountRateLimitOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+    process_ref = make_ref()
+    started_at = DateTime.utc_now()
+
+    running_entry = %{
+      pid: self(),
+      ref: process_ref,
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: nil,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      codex_last_reported_input_tokens: 0,
+      codex_last_reported_output_tokens: 0,
+      codex_last_reported_total_tokens: 0,
+      started_at: started_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    send(
+      pid,
+      {:codex_worker_update, issue_id,
+       %{
+         event: :notification,
+         payload: %{
+           "method" => "account/rateLimits/updated",
+           "params" => %{
+             "rateLimits" => %{
+               "planType" => "priority",
+               "primary" => %{
+                 "usedPercent" => 43,
+                 "windowDurationMins" => 300,
+                 "resetsAt" => 1_772_989_880
+               },
+               "secondary" => %{
+                 "usedPercent" => 64,
+                 "windowDurationMins" => 10_080,
+                 "resetsAt" => 1_773_468_681
+               },
+               "credits" => %{
+                 "hasCredits" => false,
+                 "unlimited" => false,
+                 "balance" => nil
+               }
+             }
+           }
+         },
+         timestamp: DateTime.utc_now()
+       }}
+    )
+
+    snapshot = GenServer.call(pid, :snapshot)
+
+    assert snapshot.rate_limits == %{
+             plan_type: "priority",
+             primary: %{used_percent: 43, window_minutes: 300, resets_at: 1_772_989_880},
+             secondary: %{used_percent: 64, window_minutes: 10_080, resets_at: 1_773_468_681},
+             credits: %{has_credits: false, unlimited: false, balance: nil}
+           }
   end
 
   test "orchestrator token accounting prefers total_token_usage over last_token_usage in token_count payloads" do
@@ -929,9 +1122,14 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       identifier: "MT-STALL",
       issue: %Issue{id: issue_id, identifier: "MT-STALL", state: "In Progress"},
       session_id: "thread-stall-turn-stall",
+      turn_count: 0,
       last_codex_message: nil,
       last_codex_timestamp: stale_activity_at,
       last_codex_event: :notification,
+      codex_app_server_pid: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
       started_at: stale_activity_at
     }
 
@@ -942,7 +1140,19 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     end)
 
     send(pid, :tick)
-    Process.sleep(100)
+
+    wait_for_snapshot(
+      pid,
+      fn
+        %{retrying: retrying} when is_list(retrying) ->
+          Enum.any?(retrying, &match?(%{issue_id: ^issue_id}, &1))
+
+        _ ->
+          false
+      end,
+      1_000
+    )
+
     state = :sys.get_state(pid)
 
     refute Process.alive?(worker_pid)
@@ -950,15 +1160,15 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert %{
              attempt: 1,
+             scheduled_at_ms: scheduled_at_ms,
              due_at_ms: due_at_ms,
              identifier: "MT-STALL",
              error: "stalled for " <> _
            } = state.retry_attempts[issue_id]
 
     assert is_integer(due_at_ms)
-    remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
-    assert remaining_ms >= 9_500
-    assert remaining_ms <= 10_500
+    assert is_integer(scheduled_at_ms)
+    assert due_at_ms - scheduled_at_ms == 10_000
   end
 
   test "status dashboard renders offline marker to terminal" do
@@ -1542,6 +1752,76 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert StatusDashboard.humanize_codex_message(fallback_reasoning) == "reasoning update"
   end
 
+  test "pipeline supervisor starts one orchestrator per pipeline and restarts failures in isolation" do
+    supervisor_name = Module.concat(__MODULE__, :MultiPipelineSupervisor)
+    registry_name = Module.concat(__MODULE__, :MultiPipelineRegistry)
+
+    pipeline_a = pipeline_fixture("pipeline-a")
+    pipeline_b = pipeline_fixture("pipeline-b")
+
+    {:ok, supervisor_pid} =
+      SymphonyElixir.PipelineSupervisor.start_link(
+        name: supervisor_name,
+        registry_name: registry_name,
+        pipelines: [pipeline_a, pipeline_b]
+      )
+
+    on_exit(fn ->
+      if Process.alive?(supervisor_pid) do
+        Process.exit(supervisor_pid, :normal)
+      end
+    end)
+
+    assert {:ok, pid_a} = wait_for_pipeline_lookup(registry_name, "pipeline-a")
+    assert {:ok, pid_b} = wait_for_pipeline_lookup(registry_name, "pipeline-b")
+    refute pid_a == pid_b
+
+    issue_id = "issue-pipeline-a"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-PA",
+      title: "Pipeline A",
+      description: "One orchestrator should not leak into another",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-PA"
+    }
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: nil,
+      turn_count: 0,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      codex_app_server_pid: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      started_at: DateTime.utc_now()
+    }
+
+    :sys.replace_state(pid_a, fn state ->
+      state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(state.claimed, issue_id))
+    end)
+
+    assert %{running: [%{issue_id: ^issue_id}]} = Orchestrator.snapshot(pid_a, 50)
+    assert %{running: []} = Orchestrator.snapshot(pid_b, 50)
+
+    Process.exit(pid_a, :kill)
+
+    assert {:ok, restarted_pid_a} =
+             wait_for_restarted_pipeline_lookup(registry_name, "pipeline-a", pid_a, 1_000)
+
+    refute restarted_pid_a == pid_a
+    assert {:ok, ^pid_b} = SymphonyElixir.PipelineSupervisor.lookup("pipeline-b", registry_name)
+  end
+
   test "application stop renders offline status" do
     rendered =
       ExUnit.CaptureIO.capture_io(fn ->
@@ -1600,5 +1880,55 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       {next_tokens, [{timestamp, next_tokens} | acc]}
     end)
     |> elem(1)
+  end
+
+  defp wait_for_pipeline_lookup(registry_name, pipeline_id, timeout_ms \\ 200) do
+    deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_pipeline_lookup(registry_name, pipeline_id, deadline_ms)
+  end
+
+  defp wait_for_restarted_pipeline_lookup(registry_name, pipeline_id, previous_pid, timeout_ms) do
+    deadline_ms = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_for_restarted_pipeline_lookup(registry_name, pipeline_id, previous_pid, deadline_ms)
+  end
+
+  defp do_wait_for_pipeline_lookup(registry_name, pipeline_id, deadline_ms) do
+    case SymphonyElixir.PipelineSupervisor.lookup(pipeline_id, registry_name) do
+      {:ok, pid} when is_pid(pid) ->
+        {:ok, pid}
+
+      _ ->
+        if System.monotonic_time(:millisecond) >= deadline_ms do
+          flunk("timed out waiting for pipeline orchestrator #{pipeline_id}")
+        else
+          Process.sleep(5)
+          do_wait_for_pipeline_lookup(registry_name, pipeline_id, deadline_ms)
+        end
+    end
+  end
+
+  defp do_wait_for_restarted_pipeline_lookup(registry_name, pipeline_id, previous_pid, deadline_ms) do
+    case SymphonyElixir.PipelineSupervisor.lookup(pipeline_id, registry_name) do
+      {:ok, pid} when is_pid(pid) and pid != previous_pid ->
+        {:ok, pid}
+
+      _ ->
+        if System.monotonic_time(:millisecond) >= deadline_ms do
+          flunk("timed out waiting for restarted pipeline orchestrator #{pipeline_id}")
+        else
+          Process.sleep(5)
+          do_wait_for_restarted_pipeline_lookup(registry_name, pipeline_id, previous_pid, deadline_ms)
+        end
+    end
+  end
+
+  defp pipeline_fixture(id) do
+    assert {:ok, pipeline} =
+             SymphonyElixir.Pipeline.parse(%{
+               "id" => id,
+               "tracker" => %{"kind" => "memory"}
+             })
+
+    pipeline
   end
 end

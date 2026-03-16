@@ -2,6 +2,9 @@ defmodule SymphonyElixir.LiveE2ETest do
   use SymphonyElixir.TestSupport
 
   require Logger
+  alias Mix.Tasks.Pipeline.Scaffold
+  alias SymphonyElixir.{AgentRunner, Pipeline, PipelineLoader}
+  alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.SSH
 
   @moduletag :live_e2e
@@ -119,6 +122,85 @@ defmodule SymphonyElixir.LiveE2ETest do
     }
   }
   """
+
+  test "scaffolds multiple pipelines and keeps local runs isolated" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-local-multi-pipeline-e2e-#{System.unique_integer([:positive])}"
+      )
+
+    pipelines_root = Path.join(test_root, "pipelines")
+    workspace_root = Path.join(test_root, "workspaces")
+    template_repo = Path.join(test_root, "template-repo")
+    codex_binary = Path.join(test_root, "fake-codex")
+
+    try do
+      create_template_repo!(template_repo)
+      write_fake_codex_binary!(codex_binary)
+
+      Mix.Task.reenable("pipeline.scaffold")
+
+      Scaffold.run([
+        "alpha",
+        "--pipelines-root",
+        pipelines_root,
+        "--project-slug",
+        "alpha-project",
+        "--repo",
+        template_repo,
+        "--workspace-root",
+        workspace_root,
+        "--codex-command",
+        "#{codex_binary} app-server"
+      ])
+
+      Mix.Task.reenable("pipeline.scaffold")
+
+      Scaffold.run([
+        "beta",
+        "--pipelines-root",
+        pipelines_root,
+        "--project-slug",
+        "beta-project",
+        "--repo",
+        template_repo,
+        "--workspace-root",
+        workspace_root,
+        "--codex-command",
+        "#{codex_binary} app-server"
+      ])
+
+      assert File.exists?(Path.join([pipelines_root, "alpha", "pipeline.yaml"]))
+      assert File.exists?(Path.join([pipelines_root, "alpha", "WORKFLOW.md"]))
+      assert File.exists?(Path.join([pipelines_root, "beta", "pipeline.yaml"]))
+      assert File.exists?(Path.join([pipelines_root, "beta", "WORKFLOW.md"]))
+
+      assert {:ok, pipelines} = PipelineLoader.load_pipeline_root(pipelines_root)
+      assert [%Pipeline{id: "alpha"} = alpha, %Pipeline{id: "beta"} = beta] = pipelines
+
+      alpha_issue = %Issue{
+        identifier: "ALPHA-1",
+        title: "Alpha pipeline smoke test",
+        description: "Local multi pipeline host smoke test",
+        state: "In Progress"
+      }
+
+      assert :ok =
+               AgentRunner.run(alpha, alpha_issue,
+                 max_turns: 1,
+                 issue_state_fetcher: fn _issue_ids -> {:ok, []} end
+               )
+
+      assert File.exists?(Path.join([workspace_root, "alpha", "ALPHA-1", "README.md"]))
+      refute File.exists?(Path.join([workspace_root, "beta", "BETA-1"]))
+
+      assert beta.tracker.project_slug == "beta-project"
+      assert beta.workflow_path == Path.join([pipelines_root, "beta", "WORKFLOW.md"])
+    after
+      File.rm_rf(test_root)
+    end
+  end
 
   @tag skip: @live_e2e_skip_reason
   test "creates a real Linear project and issue with a local worker" do
@@ -246,6 +328,45 @@ defmodule SymphonyElixir.LiveE2ETest do
   end
 
   defp issue_has_comment?(_issue, _expected_body), do: false
+
+  defp create_template_repo!(template_repo) do
+    File.mkdir_p!(template_repo)
+    File.write!(Path.join(template_repo, "README.md"), "# scaffolded\n")
+    System.cmd("git", ["-C", template_repo, "init", "-b", "main"])
+    System.cmd("git", ["-C", template_repo, "config", "user.name", "Test User"])
+    System.cmd("git", ["-C", template_repo, "config", "user.email", "test@example.com"])
+    System.cmd("git", ["-C", template_repo, "add", "README.md"])
+    System.cmd("git", ["-C", template_repo, "commit", "-m", "initial"])
+  end
+
+  defp write_fake_codex_binary!(codex_binary) do
+    File.write!(codex_binary, """
+    #!/bin/sh
+    count=0
+    while IFS= read -r line; do
+      count=$((count + 1))
+      case "$count" in
+        1)
+          printf '%s\\n' '{\"id\":1,\"result\":{}}'
+          ;;
+        2)
+          printf '%s\\n' '{\"id\":2,\"result\":{\"thread\":{\"id\":\"thread-local\"}}}'
+          ;;
+        3)
+          printf '%s\\n' '{\"id\":3,\"result\":{\"turn\":{\"id\":\"turn-local\"}}}'
+          ;;
+        4)
+          printf '%s\\n' '{\"method\":\"turn/completed\"}'
+          exit 0
+          ;;
+        *)
+          ;;
+      esac
+    done
+    """)
+
+    File.chmod!(codex_binary, 0o755)
+  end
 
   defp update_entity(mutation, variables, mutation_name, entity_name) do
     case Client.graphql(mutation, variables) do
