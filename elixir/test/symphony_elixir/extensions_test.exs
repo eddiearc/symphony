@@ -1064,12 +1064,13 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     {:ok, view, html} = live(build_conn(), "/panel/config")
 
-    assert html =~ "Pipeline Config"
     assert html =~ "托管管线"
     assert html =~ alpha.pipeline_config_path
     assert html =~ alpha.workflow_path
     assert html =~ "alpha-project"
     assert html =~ "beta-project"
+    assert html =~ "pipeline.yaml"
+    assert html =~ "WORKFLOW.md"
 
     switched_html =
       view
@@ -1223,11 +1224,11 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "结构化"
     assert html =~ "YAML"
     assert html =~ "config-tab config-tab-active"
-    assert html =~ "保存当前 pipeline"
+    assert html =~ "保存"
     assert html =~ "id=\"workflow-save-form\""
     refute html =~ "Memory"
     assert html =~ "决定 Symphony 去哪里拉任务"
-    assert html =~ "优先使用这里的值；留空则回退到环境变量"
+    assert html =~ "默认建议使用系统环境变量"
     assert html =~ "控制 orchestrator 轮询节奏"
     assert html =~ "决定每次会话如何启动 Codex"
     assert html =~ "这是发给每个任务 agent 的核心执行说明"

@@ -362,45 +362,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
           <%= if @panel == "config" do %>
             <section class="config-stack">
-              <section class="section-card config-command-bar">
-                <div class="config-command-bar-row">
-                  <div class="config-command-copy">
-                    <p class="section-kicker">config</p>
-                    <h2 class="config-studio-title"><%= workflow_editor_title(@workflow_target, @config_pipelines) %></h2>
-                  </div>
-
-                  <div class="config-command-meta">
-                    <%= if pipeline_editor_target?(@workflow_target) do %>
-                      <span class="hero-chip">
-                        <span class="hero-chip-label">pipeline</span>
-                        <span class="mono"><%= @workflow_target.pipeline.id %></span>
-                      </span>
-                      <span class="hero-chip hero-chip-ghost">
-                        <span class="hero-chip-label">project</span>
-                        <span><%= pipeline_switcher_copy(@workflow_target.pipeline) %></span>
-                      </span>
-                      <span class="hero-chip hero-chip-ghost">
-                        <span class="hero-chip-label">status</span>
-                        <span><%= selected_pipeline_status(@payload, @workflow_target) %></span>
-                      </span>
-                    <% else %>
-                      <span class="hero-chip">
-                        <span class="hero-chip-label">status</span>
-                        <span>unconfigured</span>
-                      </span>
-                    <% end %>
-                    <span class="hero-chip hero-chip-ghost">
-                      <span class="hero-chip-label">pipelines</span>
-                      <span class="numeric"><%= length(@config_pipelines) %></span>
-                    </span>
-                    <span class="hero-chip hero-chip-ghost">
-                      <span class="hero-chip-label">draft</span>
-                      <span><%= if @workflow_dirty, do: "Dirty", else: "Synced" %></span>
-                    </span>
-                  </div>
-                </div>
-              </section>
-
               <div class="config-workbench">
                 <aside :if={@pipeline_root_available} class="config-pipeline-column">
                   <section class="section-card config-pipeline-catalog">
@@ -462,108 +423,89 @@ defmodule SymphonyElixirWeb.DashboardLive do
                 </aside>
 
                 <section class="section-card section-card-main config-editor-card config-studio-card">
-                  <div class="config-studio-head">
-                    <div>
-                      <p class="section-kicker">editor</p>
-                      <h2 class="config-studio-title"><%= workflow_editor_title(@workflow_target, @config_pipelines) %></h2>
-                      <p class="config-studio-copy"><%= workflow_editor_copy(@workflow_target) %></p>
-                    </div>
-
-                    <div class="config-chip-stack">
-                      <%= if pipeline_editor_target?(@workflow_target) do %>
-                        <span class="hero-chip">
-                          <span class="hero-chip-label">pipeline</span>
-                          <span class="mono"><%= @workflow_target.pipeline.id %></span>
-                        </span>
-                        <span class="hero-chip hero-chip-wide">
-                          <span class="hero-chip-label">pipeline.yaml</span>
-                          <span class="mono"><%= @workflow_pipeline_config_path %></span>
-                        </span>
-                        <span class="hero-chip hero-chip-wide">
-                          <span class="hero-chip-label">WORKFLOW.md</span>
-                          <span class="mono"><%= @workflow_path %></span>
-                        </span>
-                      <% else %>
-                        <span class="hero-chip hero-chip-wide">
-                          <span class="hero-chip-label">path</span>
-                          <span class="mono"><%= @workflow_path %></span>
-                        </span>
-                      <% end %>
-                      <span :if={@workflow_dirty} class="hero-chip hero-chip-warning">
-                        <span class="hero-chip-label">draft</span>
-                        <span class="mono">有未保存改动</span>
-                      </span>
-                    </div>
-                  </div>
-
-                  <div class="config-studio-toolbar">
-                    <div class="config-tab-row" role="tablist" aria-label="配置视图">
-                      <button
-                        type="button"
-                        class={config_tab_class(@config_view, "structured")}
-                        phx-click="switch_config_view"
-                        phx-value-view="structured"
-                      >
-                        结构化
-                      </button>
-                      <button
-                        type="button"
-                        class={config_tab_class(@config_view, "yaml")}
-                        phx-click="switch_config_view"
-                        phx-value-view="yaml"
-                      >
-                        YAML
-                      </button>
-                    </div>
-
-                    <form
-                      id="workflow-save-form"
-                      class="workflow-save-form"
-                      phx-hook="WorkflowEditor"
-                      data-save-shortcut="meta+s,ctrl+s"
-                    >
-                      <input type="hidden" name="workflow[body]" value={@workflow_body} />
-
-                      <div class="editor-actions editor-actions-outside">
-                        <button type="button" class="secondary" phx-click="reload_workflow">
-                          从磁盘重载
+                  <div class="config-studio-topbar">
+                    <div class="config-studio-toolbar">
+                      <div class="config-tab-row" role="tablist" aria-label="配置视图">
+                        <button
+                          type="button"
+                          class={config_tab_class(@config_view, "structured")}
+                          phx-click="switch_config_view"
+                          phx-value-view="structured"
+                        >
+                          结构化
                         </button>
                         <button
-                          id="open-save-workflow-modal"
                           type="button"
-                          phx-click="open_save_workflow_modal"
+                          class={config_tab_class(@config_view, "yaml")}
+                          phx-click="switch_config_view"
+                          phx-value-view="yaml"
                         >
-                          <%= save_button_label(@workflow_target) %>
+                          YAML
                         </button>
                       </div>
-                    </form>
+
+                      <div class="config-toolbar-meta">
+                        <p class="config-studio-copy"><%= workflow_editor_copy(@workflow_target) %></p>
+                        <div class="config-file-meta">
+                          <%= if pipeline_editor_target?(@workflow_target) do %>
+                            <span class="config-file-item mono" title={@workflow_pipeline_config_path}>pipeline.yaml</span>
+                            <span class="config-file-item mono" title={@workflow_path}>WORKFLOW.md</span>
+                          <% else %>
+                            <span class="config-file-item mono" title={@workflow_path}><%= Path.basename(@workflow_path) %></span>
+                          <% end %>
+                          <span :if={@workflow_dirty} class="config-inline-status">未保存</span>
+                        </div>
+                      </div>
+
+                      <form
+                        id="workflow-save-form"
+                        class="workflow-save-form"
+                        phx-hook="WorkflowEditor"
+                        data-save-shortcut="meta+s,ctrl+s"
+                      >
+                        <input type="hidden" name="workflow[body]" value={@workflow_body} />
+
+                        <div class="editor-actions editor-actions-outside workflow-action-group">
+                          <button type="button" class="secondary" phx-click="reload_workflow">
+                            重载
+                          </button>
+                          <button
+                            id="open-save-workflow-modal"
+                            type="button"
+                            phx-click="open_save_workflow_modal"
+                          >
+                            <%= save_button_label(@workflow_target) %>
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+
+                    <div
+                      :if={@config_view == "structured"}
+                      class="config-module-tab-row"
+                      role="tablist"
+                      aria-label="配置模块"
+                    >
+                      <button
+                        :for={module <- @config_modules}
+                        id={"config-module-tab-#{module.id}"}
+                        type="button"
+                        role="tab"
+                        class={config_module_tab_class(@config_module, module.id)}
+                        aria-selected={to_string(@config_module == module.id)}
+                        aria-controls={"config-module-panel-#{module.id}"}
+                        phx-click="switch_config_module"
+                        phx-value-module={module.id}
+                      >
+                        <span class="config-module-tab-title"><%= module.label %></span>
+                        <span class="config-module-tab-copy"><%= module.copy %></span>
+                      </button>
+                    </div>
                   </div>
 
                   <div :if={@workflow_feedback} class={workflow_feedback_class(@workflow_feedback.kind)}>
                     <strong><%= workflow_feedback_title(@workflow_feedback.kind) %></strong>
                     <span><%= @workflow_feedback.message %></span>
-                  </div>
-
-                  <div class="workflow-meta-grid">
-                    <article class="workflow-meta-card">
-                      <p class="workflow-meta-label">草稿统计</p>
-                      <p class="workflow-meta-value numeric"><%= @workflow_stats.line_count %> 行</p>
-                      <p class="workflow-meta-copy">字符 <span class="mono"><%= @workflow_stats.char_count %></span> · YAML <span class="mono"><%= @workflow_stats.yaml_lines %></span> · Prompt <span class="mono"><%= @workflow_stats.prompt_lines %></span></p>
-                    </article>
-
-                    <article class="workflow-meta-card workflow-meta-card-manifest">
-                      <p class="workflow-meta-label">变更清单</p>
-                      <%= if @workflow_change_manifest == [] do %>
-                        <p class="workflow-empty-note">当前草稿和已装载配置一致。</p>
-                      <% else %>
-                        <div class="workflow-change-list">
-                          <div :for={item <- @workflow_change_manifest} class="workflow-change-item">
-                            <span class="workflow-change-label"><%= item.label %></span>
-                            <span class="workflow-change-arrow"><%= item.before %> -> <%= item.after %></span>
-                          </div>
-                        </div>
-                      <% end %>
-                    </article>
                   </div>
 
                   <div class="config-panel-stack">
@@ -573,23 +515,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
                       aria-label="结构化配置"
                     >
                       <span hidden>结构化字段</span>
-                      <div class="config-module-tab-row" role="tablist" aria-label="配置模块">
-                        <button
-                          :for={module <- @config_modules}
-                          id={"config-module-tab-#{module.id}"}
-                          type="button"
-                          role="tab"
-                          class={config_module_tab_class(@config_module, module.id)}
-                          aria-selected={to_string(@config_module == module.id)}
-                          aria-controls={"config-module-panel-#{module.id}"}
-                          phx-click="switch_config_module"
-                          phx-value-module={module.id}
-                        >
-                          <span class="config-module-tab-title"><%= module.label %></span>
-                          <span class="config-module-tab-copy"><%= module.copy %></span>
-                        </button>
-                      </div>
-
                       <form
                         id="workflow-structured-form"
                         class="structured-form"
@@ -666,17 +591,26 @@ defmodule SymphonyElixirWeb.DashboardLive do
                                 <input class="structured-input" type="text" name="workflow_form[tracker_project_slug]" value={Map.get(@workflow_form, "tracker_project_slug")} />
                               </label>
 
-                              <label class="structured-field">
-                                <span class="structured-label">api key</span>
-                                <span class="structured-help">优先使用这里的值；留空则回退到环境变量 `LINEAR_API_KEY`。</span>
-                                <input class="structured-input" type="text" name="workflow_form[tracker_api_key]" value={Map.get(@workflow_form, "tracker_api_key")} />
-                              </label>
+                              <details class="structured-advanced" open={tracker_advanced_open?(@workflow_form)}>
+                                <summary class="structured-advanced-summary">
+                                  <span class="structured-advanced-title">高级配置</span>
+                                  <span class="structured-advanced-copy">默认建议使用系统环境变量，只有特殊场景再展开覆盖。</span>
+                                </summary>
 
-                              <label class="structured-field">
-                                <span class="structured-label">endpoint</span>
-                                <span class="structured-help">Linear GraphQL 接口地址。通常保持默认即可，只有代理或自建转发时才需要改。</span>
-                                <input class="structured-input" type="text" name="workflow_form[tracker_endpoint]" value={Map.get(@workflow_form, "tracker_endpoint")} />
-                              </label>
+                                <div class="structured-advanced-body">
+                                  <label class="structured-field">
+                                    <span class="structured-label">api key</span>
+                                    <span class="structured-help">默认从系统环境变量 `LINEAR_API_KEY` 读取。只有你想覆盖当前机器的默认值时，才需要在这里填写。</span>
+                                    <input class="structured-input" type="password" name="workflow_form[tracker_api_key]" value={Map.get(@workflow_form, "tracker_api_key")} />
+                                  </label>
+
+                                  <label class="structured-field">
+                                    <span class="structured-label">endpoint</span>
+                                    <span class="structured-help">默认使用 Linear 官方 GraphQL endpoint。只有代理、网关或自建转发场景才需要改这里。</span>
+                                    <input class="structured-input" type="text" name="workflow_form[tracker_endpoint]" value={Map.get(@workflow_form, "tracker_endpoint")} />
+                                  </label>
+                                </div>
+                              </details>
 
                               <label class="structured-field">
                                 <span class="structured-label">active states</span>
@@ -2057,7 +1991,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp build_workflow_body(workflow_loaded, workflow_form) do
     base_config =
       case workflow_loaded do
-        %{config: config} when is_map(config) -> config
+        %{config: config} when is_map(config) -> Map.delete(config, "observability")
         _ -> %{}
       end
 
@@ -2198,6 +2132,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
     enabled = pipeline_enabled_config(config, pipeline.enabled)
 
     config
+    |> Map.delete("observability")
     |> Map.put("id", pipeline.id)
     |> Map.put("enabled", enabled)
     |> Workflow.render_content("")
@@ -2347,6 +2282,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp new_pipeline_config(base_config, attrs) when is_map(base_config) and is_map(attrs) do
     base_config
+    |> Map.delete("observability")
     |> Map.put("id", attrs.id)
     |> Map.put("enabled", attrs.enabled)
     |> Map.put(
@@ -2360,18 +2296,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp pipeline_editor_target?(%{mode: :pipeline}), do: true
   defp pipeline_editor_target?(_target), do: false
-
-  defp workflow_editor_title(%{mode: :pipeline}, pipelines)
-       when is_list(pipelines) and length(pipelines) > 1,
-       do: "Pipeline Config"
-
-  defp workflow_editor_title(
-         %{mode: :pipeline, pipeline: %Pipeline{id: pipeline_id}},
-         _pipelines
-       ),
-       do: pipeline_id
-
-  defp workflow_editor_title(_target, _pipelines), do: "Pipeline Config"
 
   defp workflow_editor_copy(%{mode: :pipeline}) do
     "Edit `pipeline.yaml` and `WORKFLOW.md`."
@@ -2435,12 +2359,20 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp pipeline_payload_next_poll(_payload, _pipeline_id), do: "n/a"
 
-  defp selected_pipeline_status(payload, %{mode: :pipeline, pipeline: %Pipeline{} = pipeline}),
-    do: config_pipeline_status(payload, pipeline)
+  defp save_button_label(_target), do: "保存"
 
-  defp selected_pipeline_status(_payload, _workflow_target), do: "unconfigured"
+  defp tracker_advanced_open?(workflow_form) when is_map(workflow_form) do
+    Enum.any?(
+      ["tracker_api_key", "tracker_endpoint"],
+      &present_value?(Map.get(workflow_form, &1))
+    )
+  end
 
-  defp save_button_label(_target), do: "保存当前 pipeline"
+  defp tracker_advanced_open?(_workflow_form), do: false
+
+  defp present_value?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present_value?(nil), do: false
+  defp present_value?(_value), do: true
 
   defp reload_feedback_message(_target), do: "已从磁盘重新载入当前 pipeline 配置。"
 
