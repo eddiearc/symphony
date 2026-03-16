@@ -985,13 +985,18 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert logs_html =~ "wrap-dashboard-2"
 
     {:ok, _home_view, home_html} = live(build_conn(), "/")
-    assert home_html =~ "priority"
-    assert home_html =~ "52%"
+    assert home_html =~ "主窗口剩余"
+    assert home_html =~ "48%"
     assert home_html =~ "5小时窗口"
     assert home_html =~ "重置 1970-01-01 00:00:01Z"
-    assert home_html =~ "66%"
+    assert home_html =~ "次窗口剩余"
+    assert home_html =~ "34%"
     assert home_html =~ "7天窗口"
     assert home_html =~ "重置 1970-01-01 00:00:02Z"
+    refute home_html =~ "通道"
+    refute home_html =~ "Credits"
+    refute home_html =~ ">52%<"
+    refute home_html =~ ">66%<"
   end
 
   test "dashboard exposes a config panel that edits and saves the default pipeline" do
