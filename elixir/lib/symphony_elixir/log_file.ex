@@ -220,6 +220,7 @@ defmodule SymphonyElixir.LogFile do
   defp tail_lines(data, size, line_limit, byte_limit) do
     lines =
       data
+      |> String.replace_invalid("")
       |> String.split(~r/\R/u, trim: false)
       |> drop_partial_first_line(size, byte_limit)
       |> Enum.reject(&(&1 == ""))

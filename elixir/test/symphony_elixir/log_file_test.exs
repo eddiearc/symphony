@@ -104,4 +104,38 @@ defmodule SymphonyElixir.LogFileTest do
              truncated: true
            } = LogFile.recent_log_view(line_limit: 3, byte_limit: 256)
   end
+
+  test "recent_log_view/1 tolerates truncated multibyte characters at the tail boundary" do
+    log_root =
+      Path.join(System.tmp_dir!(), "symphony-log-utf8-tail-test-#{System.unique_integer([:positive])}")
+
+    log_path = Path.join(log_root, "log/symphony.log")
+    File.mkdir_p!(Path.dirname(log_path))
+
+    content = "prefix-line\n中文日志\nomega-line\n"
+    byte_limit = byte_size(content) - byte_size("中文日志\nomega-line\n") + 1
+    File.write!(log_path, content)
+
+    previous_log_file = Application.get_env(:symphony_elixir, :log_file)
+
+    on_exit(fn ->
+      if is_nil(previous_log_file) do
+        Application.delete_env(:symphony_elixir, :log_file)
+      else
+        Application.put_env(:symphony_elixir, :log_file, previous_log_file)
+      end
+
+      File.rm_rf(log_root)
+    end)
+
+    Application.put_env(:symphony_elixir, :log_file, log_path)
+
+    assert %{
+             path: ^log_path,
+             available: true,
+             source_paths: [^log_path],
+             lines: ["omega-line"],
+             truncated: true
+           } = LogFile.recent_log_view(line_limit: 2, byte_limit: byte_limit)
+  end
 end

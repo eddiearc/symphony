@@ -1292,6 +1292,110 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert SymphonyElixir.Config.linear_project_slug() == "structured-save-project"
   end
 
+  test "config panel can disable an existing pipeline from structured controls" do
+    orchestrator_name = Module.concat(__MODULE__, :StructuredPipelineEnabledToggleOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    workflow_path = Workflow.workflow_file_path()
+    pipeline_config_path = Path.join(Path.dirname(workflow_path), "pipeline.yaml")
+    original_workflow = File.read!(workflow_path)
+
+    {:ok, view, html} = live(build_conn(), "/panel/config")
+
+    assert html =~ ~s(name="workflow_form[pipeline_enabled]")
+    assert html =~ "启用后参与当前宿主的轮询和调度"
+    assert html =~ "structured-switch"
+    assert html =~ ">关闭<"
+    assert html =~ ">启用<"
+
+    updated_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "pipeline_enabled" => "false"
+        }
+      )
+      |> render_change()
+
+    assert updated_html =~ ~s(name="workflow_form[pipeline_enabled]" value="false")
+
+    saved_html =
+      view
+      |> form("#workflow-editor-form", workflow: %{body: original_workflow})
+      |> render_submit()
+
+    assert saved_html =~ "已保存并重新加载当前 pipeline 配置。"
+
+    assert {:ok, saved_config} =
+             pipeline_config_path
+             |> File.read!()
+             |> YamlElixir.read_from_string()
+
+    assert saved_config["enabled"] == false
+    assert saved_html =~ "关闭"
+    assert saved_html =~ "未启用"
+  end
+
+  test "config panel keeps cleared tracker api key and endpoint blank after reload" do
+    orchestrator_name = Module.concat(__MODULE__, :ClearedTrackerFieldsPersistOrchestrator)
+    snapshot = static_snapshot()
+
+    previous_linear_api_key = System.get_env("LINEAR_API_KEY")
+
+    on_exit(fn ->
+      restore_env("LINEAR_API_KEY", previous_linear_api_key)
+    end)
+
+    System.put_env("LINEAR_API_KEY", "fallback-linear-token")
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    workflow_path = Workflow.workflow_file_path()
+    pipeline_config_path = Path.join(Path.dirname(workflow_path), "pipeline.yaml")
+    original_workflow = File.read!(workflow_path)
+
+    {:ok, view, _html} = live(build_conn(), "/panel/config")
+
+    updated_draft_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "tracker_api_key" => "",
+          "tracker_endpoint" => ""
+        }
+      )
+      |> render_change()
+
+    assert updated_draft_html =~ ~s(name="workflow_form[tracker_api_key]" value="")
+    assert updated_draft_html =~ ~s(name="workflow_form[tracker_endpoint]" value="")
+
+    saved_html =
+      view
+      |> form("#workflow-editor-form", workflow: %{body: original_workflow})
+      |> render_submit()
+
+    saved_config = File.read!(pipeline_config_path)
+
+    assert saved_html =~ "已保存并重新加载当前 pipeline 配置。"
+    refute saved_config =~ "api_key:"
+    refute saved_config =~ "endpoint:"
+
+    {:ok, reloaded_view, reloaded_html} = live(build_conn(), "/panel/config")
+
+    assert reloaded_html =~ ~s(name="workflow_form[tracker_api_key]" value="")
+    assert reloaded_html =~ ~s(name="workflow_form[tracker_endpoint]" value="")
+    refute reloaded_html =~ "fallback-linear-token"
+    refute reloaded_html =~ ~s(name="workflow_form[tracker_endpoint]" value="https://api.linear.app/graphql")
+
+    render(reloaded_view)
+  end
+
   test "config panel rejects tracker.kind memory in yaml mode" do
     orchestrator_name = Module.concat(__MODULE__, :MemoryTrackerKindRejectedOrchestrator)
     snapshot = static_snapshot()

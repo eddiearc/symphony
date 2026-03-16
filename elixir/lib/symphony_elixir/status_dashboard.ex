@@ -108,7 +108,7 @@ defmodule SymphonyElixir.StatusDashboard do
     refresh_ms_override = keyword_override(opts, :refresh_ms)
     enabled_override = keyword_override(opts, :enabled)
     render_interval_ms_override = keyword_override(opts, :render_interval_ms)
-    observability = Config.settings!().observability
+    observability = Config.host_settings!().observability
     refresh_ms = refresh_ms_override || observability.refresh_ms
     render_interval_ms = render_interval_ms_override || observability.render_interval_ms
     render_fun = Keyword.get(opts, :render_fun, &render_to_terminal/1)
@@ -194,7 +194,7 @@ defmodule SymphonyElixir.StatusDashboard do
   def handle_info(:tick, state), do: {:noreply, state}
 
   defp refresh_runtime_config(%__MODULE__{} = state) do
-    observability = Config.settings!().observability
+    observability = Config.host_settings!().observability
 
     %{
       state
@@ -368,7 +368,7 @@ defmodule SymphonyElixir.StatusDashboard do
         codex_total_tokens = Map.get(codex_totals, :total_tokens, 0)
         codex_seconds_running = Map.get(codex_totals, :seconds_running, 0)
         agent_count = length(running)
-        max_agents = Config.settings!().agent.max_concurrent_agents
+        max_agents = Config.host_settings!().agent.max_concurrent_agents
         show_pipeline? = show_pipeline_column?(snapshot)
         running_event_width = running_event_width(terminal_columns_override, show_pipeline?)
         running_rows = format_running_rows(running, running_event_width, show_pipeline?)
@@ -436,7 +436,7 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp format_project_link_lines do
     project_part =
-      case Config.settings!().tracker.project_slug do
+      case Config.host_settings!().tracker.project_slug do
         project_slug when is_binary(project_slug) and project_slug != "" ->
           colorize(linear_project_url(project_slug), @ansi_cyan)
 
@@ -532,7 +532,7 @@ defmodule SymphonyElixir.StatusDashboard do
   defp linear_project_url(project_slug), do: "https://linear.app/project/#{project_slug}/issues"
 
   defp dashboard_url do
-    dashboard_url(Config.settings!().server.host, Config.server_port(), HttpServer.bound_port())
+    dashboard_url(Config.host_settings!().server.host, Config.server_port(), HttpServer.bound_port())
   end
 
   defp dashboard_url(_host, nil, _bound_port), do: nil

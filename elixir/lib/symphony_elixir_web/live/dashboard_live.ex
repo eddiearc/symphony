@@ -430,7 +430,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                         phx-value-pipeline_id={pipeline.id}
                       >
                         <div class="pipeline-card-head">
-                          <span class="pipeline-card-kicker"><%= if pipeline.enabled, do: "Enabled", else: "Disabled" %></span>
+                          <span class="pipeline-card-kicker"><%= if pipeline.enabled, do: "启用", else: "关闭" %></span>
                           <span class="pipeline-card-status"><%= config_pipeline_status(@payload, pipeline) %></span>
                         </div>
                         <strong class="pipeline-card-title"><%= pipeline.id %></strong>
@@ -559,6 +559,34 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     <span hidden>结构化字段</span>
                     <form id="workflow-structured-form" class="structured-form" phx-change="workflow_form_changed">
                       <div class="structured-grid">
+                  <section class="structured-card">
+                    <div class="structured-card-header">
+                      <p class="structured-card-kicker">pipeline</p>
+                      <h3 class="structured-card-title">启用</h3>
+                      <p class="structured-card-copy">控制这条 pipeline 是否启用。关闭后配置仍保留在磁盘上，但不会参与轮询和调度。</p>
+                    </div>
+
+                    <div class="structured-field">
+                      <span class="structured-label">enabled</span>
+                      <span class="structured-help">启用后参与当前宿主的轮询和调度；关闭后仅保留配置，不会启动对应 orchestrator。</span>
+                      <input type="hidden" name="workflow_form[pipeline_enabled]" value="false" />
+                      <label class="structured-switch">
+                        <span class="structured-switch-text">关闭</span>
+                        <span class="structured-switch-control">
+                          <input
+                            type="checkbox"
+                            name="workflow_form[pipeline_enabled]"
+                            value="true"
+                            checked={truthy_param?(Map.get(@workflow_form, "pipeline_enabled"))}
+                          />
+                          <span class="structured-switch-track"></span>
+                          <span class="structured-switch-thumb"></span>
+                        </span>
+                        <span class="structured-switch-text">启用</span>
+                      </label>
+                    </div>
+                  </section>
+
                   <section class="structured-card">
                     <div class="structured-card-header">
                       <p class="structured-card-kicker">tracker</p>
@@ -1651,18 +1679,49 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp load_workflow_editor_content(%{
          mode: :pipeline,
-         pipeline: %Pipeline{} = pipeline,
-         workflow_path: workflow_path
-       }) do
-    with {:ok, workflow} <- Workflow.load(workflow_path) do
+         workflow_path: workflow_path,
+         pipeline_config_path: pipeline_config_path
+       })
+       when is_binary(workflow_path) and is_binary(pipeline_config_path) do
+    with {:ok, workflow} <- Workflow.load(workflow_path),
+         {:ok, pipeline_config} <- read_pipeline_editor_config(pipeline_config_path) do
       content =
-        Workflow.render_content(pipeline_editor_config(pipeline), workflow.prompt_template)
+        Workflow.render_content(
+          merge_editor_configs(pipeline_config, workflow.config),
+          workflow.prompt_template
+        )
 
       {:ok, content, parse_workflow_body(content)}
     end
   end
 
   defp load_workflow_editor_content(_target), do: {:error, :missing_pipeline_editor_content}
+
+  defp read_pipeline_editor_config(path) when is_binary(path) do
+    with {:ok, content} <- File.read(path),
+         {:ok, parsed} <- YamlElixir.read_from_string(content),
+         true <- is_map(parsed) do
+      {:ok, parsed}
+    else
+      {:error, reason} when is_atom(reason) ->
+        {:error, {:missing_pipeline_config, path, reason}}
+
+      {:error, reason} ->
+        {:error, {:pipeline_config_parse_error, path, reason}}
+
+      false ->
+        {:error, {:pipeline_config_not_a_map, path}}
+    end
+  end
+
+  defp merge_editor_configs(%{} = persisted_config, %{} = workflow_config) do
+    Map.merge(persisted_config, workflow_config, fn _key, left, right ->
+      merge_editor_config_values(left, right)
+    end)
+  end
+
+  defp merge_editor_config_values(%{} = left, %{} = right), do: merge_editor_configs(left, right)
+  defp merge_editor_config_values(_left, right), do: right
 
   defp pipeline_config_path(%Pipeline{source_path: source_path}) when is_binary(source_path) do
     Path.join(source_path, "pipeline.yaml")
@@ -1735,7 +1794,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp workflow_form_from_loaded(%{config: config, prompt_template: prompt_template}) do
     config
-    |> tracker_workflow_form()
+    |> pipeline_workflow_form()
+    |> Map.merge(tracker_workflow_form(config))
     |> Map.merge(runtime_workflow_form(config))
     |> Map.merge(codex_workflow_form(config))
     |> Map.merge(hooks_workflow_form(config))
@@ -1744,6 +1804,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp workflow_form_defaults do
     %{
+      "pipeline_enabled" => "true",
       "tracker_kind" => "",
       "tracker_project_slug" => "",
       "tracker_api_key" => "",
@@ -1786,6 +1847,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
     config =
       base_config
+      |> Map.put("enabled", truthy_param?(workflow_form["pipeline_enabled"]))
       |> put_nested(["tracker", "kind"], blank_to_nil(workflow_form["tracker_kind"]))
       |> put_nested(
         ["tracker", "project_slug"],
@@ -1908,36 +1970,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp yaml_line_count(_lines), do: 0
 
-  defp pipeline_editor_config(%Pipeline{} = pipeline) do
-    %{
-      "id" => pipeline.id,
-      "enabled" => pipeline.enabled,
-      "tracker" => plain_config_value(pipeline.tracker),
-      "polling" => plain_config_value(pipeline.polling),
-      "workspace" => plain_config_value(pipeline.workspace),
-      "agent" => plain_config_value(pipeline.agent),
-      "codex" => plain_config_value(pipeline.codex),
-      "hooks" => plain_config_value(pipeline.hooks),
-      "observability" => plain_config_value(pipeline.observability),
-      "server" => plain_config_value(pipeline.server)
-    }
-  end
-
-  defp plain_config_value(value) when is_struct(value) do
-    value
-    |> Map.from_struct()
-    |> plain_config_value()
-  end
-
-  defp plain_config_value(value) when is_map(value) do
-    Enum.reduce(value, %{}, fn {key, nested}, acc ->
-      Map.put(acc, to_string(key), plain_config_value(nested))
-    end)
-  end
-
-  defp plain_config_value(value) when is_list(value), do: Enum.map(value, &plain_config_value/1)
-  defp plain_config_value(value), do: value
-
   defp validate_editor_tracker_kind(config) when is_map(config) do
     if get_in(config, ["tracker", "kind"]) == "memory" do
       {:error, :unsupported_memory_tracker_kind}
@@ -1947,11 +1979,21 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp render_pipeline_config_yaml(%Pipeline{} = pipeline, config) when is_map(config) do
+    enabled = pipeline_enabled_config(config, pipeline.enabled)
+
     config
     |> Map.put("id", pipeline.id)
-    |> Map.put("enabled", pipeline.enabled)
+    |> Map.put("enabled", enabled)
     |> Workflow.render_content("")
     |> extract_front_matter_yaml()
+  end
+
+  defp pipeline_enabled_config(config, fallback) when is_map(config) do
+    case Map.get(config, "enabled", fallback) do
+      true -> true
+      false -> false
+      _ -> fallback
+    end
   end
 
   defp extract_front_matter_yaml(rendered_body) when is_binary(rendered_body) do
@@ -2153,7 +2195,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
         dashboard_pipeline_status(pipeline_payload)
 
       _ ->
-        if enabled, do: "待接管", else: "未启用"
+        if enabled, do: "已启用", else: "未启用"
     end
   end
 
@@ -2190,6 +2232,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp workflow_change_manifest(loaded_form, workflow_form) do
     manifest_fields = [
+      {"pipeline_enabled", "启用状态"},
       {"tracker_project_slug", "项目 slug"},
       {"tracker_endpoint", "Linear endpoint"},
       {"tracker_active_states", "活跃状态"},
@@ -2278,6 +2321,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp normalize_display_value(value, _labels) when value in ["", "nil"], do: "未返回"
   defp normalize_display_value(value, labels), do: Map.get(labels, value, value)
+
+  defp pipeline_workflow_form(config) do
+    %{
+      "pipeline_enabled" => if(Map.get(config, "enabled", true), do: "true", else: "false")
+    }
+  end
 
   defp tracker_workflow_form(config) do
     %{

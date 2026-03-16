@@ -184,6 +184,24 @@ defmodule SymphonyElixir.CoreTest do
     assert pipeline.tracker.project_slug == "pipeline-project"
   end
 
+  test "host settings fall back to the first configured pipeline when all pipelines are disabled" do
+    workflow_path = Workflow.workflow_file_path()
+
+    write_workflow_file!(workflow_path,
+      enabled: false,
+      tracker_project_slug: "disabled-project",
+      observability_refresh_ms: 2_500,
+      server_host: "0.0.0.0"
+    )
+
+    assert {:error, :no_enabled_pipelines} = Config.current_pipeline()
+
+    assert {:ok, settings} = Config.host_settings()
+    assert settings.tracker.project_slug == "disabled-project"
+    assert settings.observability.refresh_ms == 2_500
+    assert settings.server.host == "0.0.0.0"
+  end
+
   test "pipeline loader reads pipelines directory layout" do
     root =
       Path.join(

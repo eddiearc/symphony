@@ -80,16 +80,12 @@ defmodule SymphonyElixir.CLI do
   @spec run_pipeline_root(String.t(), deps()) :: :ok | {:error, String.t()}
   defp run_pipeline_root(pipeline_root_path, deps) do
     with {:ok, pipelines} <- load_pipelines(deps, pipeline_root_path),
-         {:ok, enabled_pipelines} <- enabled_pipelines(pipelines),
-         :ok <- validate_enabled_pipelines(enabled_pipelines, deps) do
+         :ok <- validate_enabled_pipelines(enabled_pipelines(pipelines), deps) do
       :ok = set_pipeline_root_path(deps, pipeline_root_path)
       start_runtime({:pipelines, pipeline_root_path}, deps)
     else
       {:error, {:invalid_enabled_pipeline, pipeline_id, reason}} ->
         {:error, "Invalid enabled pipeline: #{pipeline_id} (#{inspect(reason)})"}
-
-      {:error, :no_enabled_pipelines} ->
-        {:error, "No enabled pipelines found under #{pipeline_root_path}"}
 
       {:error, reason} ->
         {:error, "Failed to load pipelines from #{pipeline_root_path}: #{inspect(reason)}"}
@@ -107,18 +103,9 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  @spec enabled_pipelines([SymphonyElixir.Pipeline.t()]) ::
-          {:ok, [SymphonyElixir.Pipeline.t(), ...]} | {:error, :no_enabled_pipelines}
+  @spec enabled_pipelines([SymphonyElixir.Pipeline.t()]) :: [SymphonyElixir.Pipeline.t()]
   defp enabled_pipelines(pipelines) when is_list(pipelines) do
-    enabled_pipelines = Enum.filter(pipelines, & &1.enabled)
-
-    case enabled_pipelines do
-      [] ->
-        {:error, :no_enabled_pipelines}
-
-      pipelines ->
-        {:ok, pipelines}
-    end
+    Enum.filter(pipelines, & &1.enabled)
   end
 
   @spec validate_enabled_pipeline(SymphonyElixir.Pipeline.t(), deps()) ::

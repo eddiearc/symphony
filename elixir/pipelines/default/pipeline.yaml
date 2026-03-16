@@ -1,9 +1,8 @@
-id: "default"
-enabled: true
 tracker:
+  active_states: ["Todo", "In Progress", "Merging", "Rework"]
+  assignee: null
   kind: "linear"
   project_slug: "symphony-cb81294e364c"
-  active_states: ["Todo", "In Progress", "Merging", "Rework"]
   terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
 polling:
   interval_ms: 5000
@@ -11,13 +10,19 @@ workspace:
   root: "~/code/symphony-workspaces"
 agent:
   max_concurrent_agents: 10
+  max_concurrent_agents_by_state:
+    {}
+  max_retry_backoff_ms: 300000
   max_turns: 20
 codex:
   approval_policy: "never"
   command: "codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --model gpt-5.4 app-server"
+  read_timeout_ms: 5000
+  stall_timeout_ms: 300000
   thread_sandbox: "danger-full-access"
   turn_sandbox_policy:
     type: "dangerFullAccess"
+  turn_timeout_ms: 3600000
 hooks:
   after_create: |
     git clone --depth 1 https://github.com/eddiearc/symphony .
@@ -28,3 +33,13 @@ hooks:
     cd elixir
     mise trust
     mise exec -- mix deps.get
+  timeout_ms: 60000
+observability:
+  dashboard_enabled: true
+  refresh_ms: 1000
+  render_interval_ms: 16
+server:
+  host: "127.0.0.1"
+  port: null
+enabled: true
+id: "default"

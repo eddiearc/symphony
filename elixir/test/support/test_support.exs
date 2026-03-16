@@ -133,11 +133,12 @@ defmodule SymphonyElixir.TestSupport do
     observability_render_interval_ms = Keyword.get(config, :observability_render_interval_ms)
     server_port = Keyword.get(config, :server_port)
     server_host = Keyword.get(config, :server_host)
+    enabled = Keyword.get(config, :enabled)
 
     sections =
       [
         "id: \"default\"",
-        "enabled: true",
+        "enabled: #{yaml_value(enabled)}",
         "tracker:",
         "  kind: #{yaml_value(tracker_kind)}",
         "  endpoint: #{yaml_value(tracker_endpoint)}",
@@ -221,6 +222,7 @@ defmodule SymphonyElixir.TestSupport do
           observability_render_interval_ms: 16,
           server_port: nil,
           server_host: nil,
+          enabled: true,
           prompt: @workflow_prompt
         ],
         overrides

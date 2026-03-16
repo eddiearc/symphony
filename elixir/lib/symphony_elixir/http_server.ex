@@ -20,7 +20,7 @@ defmodule SymphonyElixir.HttpServer do
   def start_link(opts \\ []) do
     case Keyword.get(opts, :port, Config.server_port()) do
       port when is_integer(port) and port >= 0 ->
-        host = Keyword.get(opts, :host, Config.settings!().server.host)
+        host = Keyword.get(opts, :host, Config.host_settings!().server.host)
         orchestrator = Keyword.get(opts, :orchestrator, Orchestrator)
         pipelines = Keyword.get_lazy(opts, :pipelines, &load_pipelines/0)
 

@@ -31,24 +31,40 @@ defmodule SymphonyElixir.Config do
   @spec settings() :: {:ok, Schema.t()} | {:error, term()}
   def settings do
     with {:ok, pipeline} <- current_pipeline() do
-      {:ok,
-       %Schema{
-         tracker: pipeline.tracker,
-         polling: pipeline.polling,
-         workspace: pipeline.workspace,
-         worker: pipeline.worker,
-         agent: pipeline.agent,
-         codex: pipeline.codex,
-         hooks: pipeline.hooks,
-         observability: pipeline.observability,
-         server: pipeline.server
-       }}
+      {:ok, settings_from_pipeline(pipeline)}
     end
   end
 
   @spec settings!() :: Schema.t()
   def settings! do
     case settings() do
+      {:ok, settings} ->
+        settings
+
+      {:error, reason} ->
+        raise ArgumentError, message: format_config_error(reason)
+    end
+  end
+
+  @spec host_settings() :: {:ok, Schema.t()} | {:error, term()}
+  def host_settings do
+    case pipelines() do
+      {:ok, pipelines} ->
+        pipeline =
+          Enum.find(pipelines, & &1.enabled) ||
+            List.first(pipelines) ||
+            %Pipeline{}
+
+        {:ok, settings_from_pipeline(pipeline)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @spec host_settings!() :: Schema.t()
+  def host_settings! do
+    case host_settings() do
       {:ok, settings} ->
         settings
 
@@ -96,7 +112,7 @@ defmodule SymphonyElixir.Config do
   def server_port do
     case Application.get_env(:symphony_elixir, :server_port_override) do
       port when is_integer(port) and port >= 0 -> port
-      _ -> settings!().server.port
+      _ -> host_settings!().server.port
     end
   end
 
@@ -110,7 +126,7 @@ defmodule SymphonyElixir.Config do
 
   @spec current_pipeline() :: {:ok, Pipeline.t()} | {:error, term()}
   def current_pipeline do
-    case PipelineLoader.load_pipeline_root(SymphonyElixir.Workflow.pipeline_root_path()) do
+    case pipelines() do
       {:ok, pipelines} ->
         case Enum.find(pipelines, & &1.enabled) do
           %Pipeline{} = pipeline -> {:ok, pipeline}
@@ -194,5 +210,23 @@ defmodule SymphonyElixir.Config do
       other ->
         "Invalid pipeline config: #{inspect(other)}"
     end
+  end
+
+  defp pipelines do
+    PipelineLoader.load_pipeline_root(SymphonyElixir.Workflow.pipeline_root_path())
+  end
+
+  defp settings_from_pipeline(%Pipeline{} = pipeline) do
+    %Schema{
+      tracker: pipeline.tracker,
+      polling: pipeline.polling,
+      workspace: pipeline.workspace,
+      worker: pipeline.worker,
+      agent: pipeline.agent,
+      codex: pipeline.codex,
+      hooks: pipeline.hooks,
+      observability: pipeline.observability,
+      server: pipeline.server
+    }
   end
 end
