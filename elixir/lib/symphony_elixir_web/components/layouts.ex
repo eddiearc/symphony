@@ -36,15 +36,6 @@ defmodule SymphonyElixirWeb.Layouts do
               mounted: function () {
                 var self = this;
 
-                this.submitHandler = function (event) {
-                  var message = self.el.dataset.confirmMessage || "确认保存当前配置吗？";
-
-                  if (!window.confirm(message)) {
-                    event.preventDefault();
-                    event.stopImmediatePropagation();
-                  }
-                };
-
                 this.keydownHandler = function (event) {
                   var isSaveShortcut =
                     (event.metaKey || event.ctrlKey) &&
@@ -55,23 +46,13 @@ defmodule SymphonyElixirWeb.Layouts do
                   if (!isSaveShortcut) return;
 
                   event.preventDefault();
-
-                  if (typeof self.el.requestSubmit === "function") {
-                    self.el.requestSubmit();
-                  } else {
-                    self.el.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}));
-                  }
+                  self.pushEvent("open_save_workflow_modal", {});
                 };
 
-                this.el.addEventListener("submit", this.submitHandler, true);
                 window.addEventListener("keydown", this.keydownHandler);
               },
 
               destroyed: function () {
-                if (this.submitHandler) {
-                  this.el.removeEventListener("submit", this.submitHandler, true);
-                }
-
                 if (this.keydownHandler) {
                   window.removeEventListener("keydown", this.keydownHandler);
                 }

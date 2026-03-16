@@ -1095,8 +1095,13 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     saved_html =
       view
-      |> form("#workflow-save-form")
-      |> render_submit()
+      |> element("#open-save-workflow-modal")
+      |> render_click()
+      |> then(fn _html ->
+        view
+        |> element("button[phx-click=\"confirm_save_workflow\"]")
+        |> render_click()
+      end)
 
     assert saved_html =~ "已保存并重新加载当前 pipeline 配置。"
 
@@ -1201,7 +1206,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert get_in(alpha_config, ["tracker", "project_slug"]) == "alpha-project"
   end
 
-  test "config panel exposes save confirmation metadata and keyboard shortcut hook" do
+  test "config panel exposes save modal affordances and keyboard shortcut hook" do
     orchestrator_name = Module.concat(__MODULE__, :WorkflowEditorHooksOrchestrator)
     snapshot = static_snapshot()
 
@@ -1209,13 +1214,12 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
-    {:ok, _view, html} = live(build_conn(), "/panel/config")
+    {:ok, view, html} = live(build_conn(), "/panel/config")
 
     assert html =~ "phx-hook=\"WorkflowEditor\""
     assert html =~ "data-save-shortcut=\"meta+s,ctrl+s\""
-    assert html =~ "data-confirm-message="
-    assert html =~ "即将保存 pipeline `default`。"
-    assert html =~ "当前草稿和已装载配置一致。"
+    assert html =~ "id=\"open-save-workflow-modal\""
+    refute html =~ "data-confirm-message="
     assert html =~ "结构化"
     assert html =~ "YAML"
     assert html =~ "config-tab config-tab-active"
@@ -1227,6 +1231,16 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "控制 orchestrator 轮询节奏"
     assert html =~ "决定每次会话如何启动 Codex"
     assert html =~ "这是发给每个任务 agent 的核心执行说明"
+
+    opened_html =
+      view
+      |> element("#open-save-workflow-modal")
+      |> render_click()
+
+    assert opened_html =~ "Review Changes"
+    assert opened_html =~ "Save &amp; Reload"
+    assert opened_html =~ "pipeline / default"
+    assert opened_html =~ "The current draft already matches the loaded pipeline config."
   end
 
   test "config panel offers structured controls that update the markdown draft" do
@@ -1290,6 +1304,49 @@ defmodule SymphonyElixir.ExtensionsTest do
              "structured-save-project"
 
     assert SymphonyElixir.Config.linear_project_slug() == "structured-save-project"
+  end
+
+  test "config panel can save through the review modal" do
+    orchestrator_name = Module.concat(__MODULE__, :SaveWorkflowModalOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    workflow_path = Workflow.workflow_file_path()
+    pipeline_config_path = Path.join(Path.dirname(workflow_path), "pipeline.yaml")
+
+    {:ok, view, _html} = live(build_conn(), "/panel/config")
+
+    updated_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "tracker_project_slug" => "modal-save-project"
+        }
+      )
+      |> render_change()
+
+    assert updated_html =~ "modal-save-project"
+
+    modal_html =
+      view
+      |> element("#open-save-workflow-modal")
+      |> render_click()
+
+    assert modal_html =~ "Review Changes"
+    assert modal_html =~ "modal-save-project"
+
+    saved_html =
+      view
+      |> element("button[phx-click=\"confirm_save_workflow\"]")
+      |> render_click()
+
+    assert saved_html =~ "已保存并重新加载当前 pipeline 配置。"
+
+    assert File.read!(pipeline_config_path) =~ "modal-save-project"
+    assert SymphonyElixir.Config.linear_project_slug() == "modal-save-project"
   end
 
   test "config panel can disable an existing pipeline from structured controls" do
