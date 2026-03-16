@@ -643,40 +643,106 @@ pre,
 
 .config-studio-head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   align-items: start;
 }
 
 .config-stack {
   display: grid;
-  gap: 1rem;
+  gap: 0;
 }
 
 .config-command-bar {
-  padding: 0.9rem 1rem;
+  padding: 0.85rem 1rem 0.9rem;
   background: rgba(255, 255, 255, 0.9);
 }
 
 .config-command-bar-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-start;
   gap: 1rem;
   flex-wrap: wrap;
 }
 
 .config-command-copy {
   display: grid;
-  gap: 0.22rem;
+  gap: 0.28rem;
   min-width: 0;
 }
 
-.config-command-meta {
+.config-command-bar .config-studio-title {
+  color: var(--ink);
+  font-size: clamp(1.3rem, 1.9vw, 1.7rem);
+  line-height: 1;
+}
+
+.config-command-summary {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem;
-  min-width: 0;
+  gap: 0.55rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.config-command-summary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.config-command-summary span::before {
+  content: "";
+  width: 0.24rem;
+  height: 0.24rem;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 48%, white 52%);
+}
+
+.config-command-summary span:first-child::before {
+  display: none;
+}
+
+.config-editor-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.config-inline-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.6rem;
+  padding: 0.18rem 0.58rem;
+  border-radius: 999px;
+  border: 1px solid rgba(241, 216, 166, 0.7);
+  background: rgba(255, 247, 232, 0.92);
+  color: #8a5a00;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.config-file-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.7rem;
+}
+
+.config-file-item {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.7rem;
+  padding: 0.16rem 0.58rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklab, var(--editor-line) 72%, white 28%);
+  background: color-mix(in oklab, var(--editor-bg-soft) 72%, black 28%);
+  color: color-mix(in oklab, var(--editor-ink) 78%, var(--accent-soft) 22%);
+  font-size: 0.76rem;
+  max-width: 100%;
 }
 
 .config-workbench {
@@ -980,15 +1046,45 @@ pre,
   align-items: center;
   gap: 1rem;
   flex-wrap: wrap;
-  margin-top: 0.75rem;
+  margin-top: 0;
+}
+
+.config-studio-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  margin: -1.18rem -1.2rem 0;
+  padding: 0.72rem 1.2rem 0.62rem;
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--editor-bg-soft) 94%, black 6%) 0%, color-mix(in oklab, var(--editor-bg) 98%, black 2%) 100%);
+  border-bottom: 1px solid color-mix(in oklab, var(--editor-line) 76%, black 24%);
+  backdrop-filter: blur(18px);
+}
+
+.config-toolbar-meta {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+  flex: 1 1 18rem;
+}
+
+.config-studio-topbar .config-studio-copy {
+  margin: 0;
+  max-width: none;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.config-studio-topbar .config-file-meta {
+  margin-top: 0;
 }
 
 .config-tab-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.55rem;
-  width: min(100%, 16rem);
-  padding: 0.35rem;
+  gap: 0.25rem;
+  width: min(100%, 11rem);
+  padding: 0.2rem;
   border-radius: 999px;
   border: 1px solid color-mix(in oklab, var(--editor-line) 74%, white 26%);
   background: color-mix(in oklab, var(--editor-bg-soft) 74%, black 26%);
@@ -997,11 +1093,14 @@ pre,
 .config-tab {
   width: 100%;
   min-width: 0;
-  padding: 0.7rem 1rem;
+  min-height: 2rem;
+  padding: 0.42rem 0.75rem;
   border-radius: 999px;
   border-color: transparent;
   background: transparent;
   color: color-mix(in oklab, var(--editor-ink) 72%, var(--accent-soft) 28%);
+  font-size: 0.8rem;
+  font-weight: 700;
   box-shadow: none;
 }
 
@@ -1015,7 +1114,67 @@ pre,
   background: color-mix(in oklab, var(--accent) 72%, white 28%);
   border-color: color-mix(in oklab, var(--accent) 74%, black 26%);
   color: white;
-  box-shadow: 0 10px 24px rgba(16, 163, 127, 0.2);
+  box-shadow: 0 6px 16px rgba(16, 163, 127, 0.18);
+}
+
+.config-module-tab-row {
+  display: flex;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding: 0.5rem 0 0.05rem;
+  scrollbar-width: thin;
+}
+
+.config-module-tab {
+  display: grid;
+  gap: 0.08rem;
+  justify-items: start;
+  flex: 0 0 auto;
+  min-width: 8.4rem;
+  padding: 0.46rem 0.68rem;
+  border-radius: 14px;
+  border: 1px solid color-mix(in oklab, var(--editor-line) 74%, white 26%);
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--editor-bg-soft) 84%, white 16%) 0%, color-mix(in oklab, var(--editor-bg) 88%, black 12%) 100%);
+  color: color-mix(in oklab, var(--editor-ink) 74%, var(--accent-soft) 26%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 8px 20px rgba(5, 10, 18, 0.12);
+}
+
+.config-module-tab:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in oklab, var(--accent) 62%, white 38%);
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--accent-soft) 30%, var(--editor-bg-soft) 70%) 0%, color-mix(in oklab, var(--editor-bg) 84%, black 16%) 100%);
+}
+
+.config-module-tab-active,
+.config-module-tab[aria-selected="true"] {
+  border-color: color-mix(in oklab, var(--accent) 68%, white 32%);
+  background:
+    radial-gradient(circle at top right, color-mix(in oklab, var(--accent) 34%, transparent) 0%, transparent 48%),
+    linear-gradient(180deg, color-mix(in oklab, var(--accent) 56%, white 44%) 0%, color-mix(in oklab, var(--editor-bg-soft) 86%, white 14%) 100%);
+  color: var(--editor-ink);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.32),
+    0 10px 24px rgba(16, 163, 127, 0.14);
+}
+
+.config-module-tab-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.config-module-tab-copy {
+  color: color-mix(in oklab, var(--editor-ink) 62%, var(--accent-soft) 38%);
+  font-size: 0.67rem;
+  line-height: 1.2;
+  max-width: 13ch;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .workflow-save-form {
@@ -1026,10 +1185,16 @@ pre,
   justify-content: flex-end;
 }
 
+.workflow-action-group button {
+  min-height: 2rem;
+  padding: 0.4rem 0.78rem;
+  font-size: 0.8rem;
+}
+
 .config-panel-stack {
   display: grid;
   gap: 1rem;
-  margin-top: 1rem;
+  margin-top: 0.85rem;
 }
 
 .config-panel {
@@ -1128,6 +1293,20 @@ pre,
   grid-template-columns: 1fr;
 }
 
+.structured-grid-modules {
+  gap: 0;
+}
+
+.config-module-panel {
+  display: grid;
+  gap: 0.9rem;
+  margin-top: 1rem;
+}
+
+.config-module-panel[hidden] {
+  display: none;
+}
+
 .structured-card {
   display: grid;
   gap: 0.8rem;
@@ -1169,6 +1348,59 @@ pre,
 .structured-field {
   display: grid;
   gap: 0.35rem;
+}
+
+.structured-advanced {
+  display: grid;
+  gap: 0.8rem;
+  padding: 0.85rem 0.9rem 0.95rem;
+  border-radius: 18px;
+  border: 1px solid color-mix(in oklab, var(--line-strong) 80%, white 20%);
+  background: color-mix(in oklab, var(--card-muted) 80%, white 20%);
+}
+
+.structured-advanced-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.structured-advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.structured-advanced-title {
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.structured-advanced-copy {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+  text-align: right;
+}
+
+.structured-advanced-summary::after {
+  content: "+";
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.structured-advanced[open] .structured-advanced-summary::after {
+  content: "-";
+}
+
+.structured-advanced-body {
+  display: grid;
+  gap: 0.85rem;
 }
 
 .structured-choice-row {
@@ -2162,6 +2394,11 @@ pre,
     grid-template-columns: 1fr 1fr;
   }
 
+  .config-module-tab {
+    flex-basis: 11.5rem;
+    min-width: 11.5rem;
+  }
+
   .config-command-stats {
     grid-template-columns: 1fr;
   }
@@ -2178,6 +2415,17 @@ pre,
 
   .structured-grid {
     grid-template-columns: 1fr;
+  }
+
+  .config-module-tab-row {
+    margin: 0 -0.15rem;
+    padding: 0.25rem 0.15rem 0.4rem;
+  }
+
+  .config-module-tab {
+    flex-basis: 10.5rem;
+    min-width: 10.5rem;
+    padding: 0.8rem 0.85rem;
   }
 
   .editor-actions {

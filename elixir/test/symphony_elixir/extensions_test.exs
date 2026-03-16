@@ -1064,12 +1064,13 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     {:ok, view, html} = live(build_conn(), "/panel/config")
 
-    assert html =~ "Pipeline Config"
     assert html =~ "托管管线"
     assert html =~ alpha.pipeline_config_path
     assert html =~ alpha.workflow_path
     assert html =~ "alpha-project"
     assert html =~ "beta-project"
+    assert html =~ "pipeline.yaml"
+    assert html =~ "WORKFLOW.md"
 
     switched_html =
       view
@@ -1223,11 +1224,11 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "结构化"
     assert html =~ "YAML"
     assert html =~ "config-tab config-tab-active"
-    assert html =~ "保存当前 pipeline"
+    assert html =~ "保存"
     assert html =~ "id=\"workflow-save-form\""
     refute html =~ "Memory"
     assert html =~ "决定 Symphony 去哪里拉任务"
-    assert html =~ "优先使用这里的值；留空则回退到环境变量"
+    assert html =~ "默认建议使用系统环境变量"
     assert html =~ "控制 orchestrator 轮询节奏"
     assert html =~ "决定每次会话如何启动 Codex"
     assert html =~ "这是发给每个任务 agent 的核心执行说明"
@@ -1267,6 +1268,34 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert updated_html =~ "designer-project"
     assert updated_html =~ "/tmp/designer-workspaces"
     assert updated_html =~ "Structured prompt body"
+  end
+
+  test "config panel groups structured modules behind horizontal tabs" do
+    orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowModuleTabsOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, view, html} = live(build_conn(), "/panel/config")
+    document = Floki.parse_document!(html)
+
+    assert Floki.find(document, "[role='tablist'][aria-label='配置模块']") != []
+    assert Floki.find(document, "#config-module-tab-pipeline[aria-selected='true']") != []
+    assert Floki.find(document, "#config-module-panel-tracker[hidden]") != []
+    assert Floki.find(document, "#config-module-panel-prompt[hidden]") != []
+
+    prompt_html =
+      view
+      |> element("#config-module-tab-prompt")
+      |> render_click()
+
+    prompt_document = Floki.parse_document!(prompt_html)
+
+    assert Floki.find(prompt_document, "#config-module-tab-prompt[aria-selected='true']") != []
+    assert Floki.find(prompt_document, "#config-module-panel-prompt[hidden]") == []
+    assert Floki.find(prompt_document, "#config-module-panel-pipeline[hidden]") != []
   end
 
   test "config panel renders the prompt template with a markdown preview component" do

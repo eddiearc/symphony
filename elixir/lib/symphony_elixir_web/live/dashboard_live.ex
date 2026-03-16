@@ -15,6 +15,16 @@ defmodule SymphonyElixirWeb.DashboardLive do
   }
 
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
+
+  @config_modules [
+    %{id: "pipeline", label: "Pipeline", copy: "启用状态与当前目标管线。"},
+    %{id: "tracker", label: "Tracker", copy: "Linear 连接与状态筛选。"},
+    %{id: "runtime", label: "Runtime", copy: "轮询、并发与退避限制。"},
+    %{id: "codex", label: "Codex", copy: "执行命令、沙箱与停滞超时。"},
+    %{id: "hooks", label: "Hooks", copy: "工作区生命周期脚本。"},
+    %{id: "prompt", label: "Prompt", copy: "任务模版与 Markdown 预览。"}
+  ]
+  @default_config_module "pipeline"
   @runtime_tick_ms 1_000
   @state_labels %{
     "Todo" => "待开始",
@@ -44,6 +54,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
       |> assign(:payload, load_payload())
       |> assign(:now, DateTime.utc_now())
       |> assign(:panel, normalize_panel(Map.get(params || %{}, "panel")))
+      |> assign(:config_modules, @config_modules)
+      |> assign(:config_module, @default_config_module)
       |> assign(:selected_pipeline_id, nil)
       |> assign(:config_view, "structured")
       |> assign(:pipeline_root_path, Workflow.pipeline_root_path())
@@ -214,6 +226,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
     {:noreply, assign(socket, :config_view, normalize_config_view(view))}
   end
 
+  def handle_event("switch_config_module", %{"module" => module}, socket) do
+    {:noreply, assign(socket, :config_module, normalize_config_module(module))}
+  end
+
   def handle_event("open_save_workflow_modal", _params, socket) do
     {:noreply,
      socket
@@ -346,45 +362,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
           <%= if @panel == "config" do %>
             <section class="config-stack">
-              <section class="section-card config-command-bar">
-                <div class="config-command-bar-row">
-                  <div class="config-command-copy">
-                    <p class="section-kicker">config</p>
-                    <h2 class="config-studio-title"><%= workflow_editor_title(@workflow_target, @config_pipelines) %></h2>
-                  </div>
-
-                  <div class="config-command-meta">
-                    <%= if pipeline_editor_target?(@workflow_target) do %>
-                      <span class="hero-chip">
-                        <span class="hero-chip-label">pipeline</span>
-                        <span class="mono"><%= @workflow_target.pipeline.id %></span>
-                      </span>
-                      <span class="hero-chip hero-chip-ghost">
-                        <span class="hero-chip-label">project</span>
-                        <span><%= pipeline_switcher_copy(@workflow_target.pipeline) %></span>
-                      </span>
-                      <span class="hero-chip hero-chip-ghost">
-                        <span class="hero-chip-label">status</span>
-                        <span><%= selected_pipeline_status(@payload, @workflow_target) %></span>
-                      </span>
-                    <% else %>
-                      <span class="hero-chip">
-                        <span class="hero-chip-label">status</span>
-                        <span>unconfigured</span>
-                      </span>
-                    <% end %>
-                    <span class="hero-chip hero-chip-ghost">
-                      <span class="hero-chip-label">pipelines</span>
-                      <span class="numeric"><%= length(@config_pipelines) %></span>
-                    </span>
-                    <span class="hero-chip hero-chip-ghost">
-                      <span class="hero-chip-label">draft</span>
-                      <span><%= if @workflow_dirty, do: "Dirty", else: "Synced" %></span>
-                    </span>
-                  </div>
-                </div>
-              </section>
-
               <div class="config-workbench">
                 <aside :if={@pipeline_root_available} class="config-pipeline-column">
                   <section class="section-card config-pipeline-catalog">
@@ -446,81 +423,84 @@ defmodule SymphonyElixirWeb.DashboardLive do
                 </aside>
 
                 <section class="section-card section-card-main config-editor-card config-studio-card">
-                  <div class="config-studio-head">
-                    <div>
-                      <p class="section-kicker">editor</p>
-                      <h2 class="config-studio-title"><%= workflow_editor_title(@workflow_target, @config_pipelines) %></h2>
-                      <p class="config-studio-copy"><%= workflow_editor_copy(@workflow_target) %></p>
-                    </div>
-
-                    <div class="config-chip-stack">
-                      <%= if pipeline_editor_target?(@workflow_target) do %>
-                        <span class="hero-chip">
-                          <span class="hero-chip-label">pipeline</span>
-                          <span class="mono"><%= @workflow_target.pipeline.id %></span>
-                        </span>
-                        <span class="hero-chip hero-chip-wide">
-                          <span class="hero-chip-label">pipeline.yaml</span>
-                          <span class="mono"><%= @workflow_pipeline_config_path %></span>
-                        </span>
-                        <span class="hero-chip hero-chip-wide">
-                          <span class="hero-chip-label">WORKFLOW.md</span>
-                          <span class="mono"><%= @workflow_path %></span>
-                        </span>
-                      <% else %>
-                        <span class="hero-chip hero-chip-wide">
-                          <span class="hero-chip-label">path</span>
-                          <span class="mono"><%= @workflow_path %></span>
-                        </span>
-                      <% end %>
-                      <span :if={@workflow_dirty} class="hero-chip hero-chip-warning">
-                        <span class="hero-chip-label">draft</span>
-                        <span class="mono">有未保存改动</span>
-                      </span>
-                    </div>
-                  </div>
-
-                  <div class="config-studio-toolbar">
-                    <div class="config-tab-row" role="tablist" aria-label="配置视图">
-                      <button
-                        type="button"
-                        class={config_tab_class(@config_view, "structured")}
-                        phx-click="switch_config_view"
-                        phx-value-view="structured"
-                      >
-                        结构化
-                      </button>
-                      <button
-                        type="button"
-                        class={config_tab_class(@config_view, "yaml")}
-                        phx-click="switch_config_view"
-                        phx-value-view="yaml"
-                      >
-                        YAML
-                      </button>
-                    </div>
-
-                    <form
-                      id="workflow-save-form"
-                      class="workflow-save-form"
-                      phx-hook="WorkflowEditor"
-                      data-save-shortcut="meta+s,ctrl+s"
-                    >
-                      <input type="hidden" name="workflow[body]" value={@workflow_body} />
-
-                      <div class="editor-actions editor-actions-outside">
-                        <button type="button" class="secondary" phx-click="reload_workflow">
-                          从磁盘重载
+                  <div class="config-studio-topbar">
+                    <div class="config-studio-toolbar">
+                      <div class="config-tab-row" role="tablist" aria-label="配置视图">
+                        <button
+                          type="button"
+                          class={config_tab_class(@config_view, "structured")}
+                          phx-click="switch_config_view"
+                          phx-value-view="structured"
+                        >
+                          结构化
                         </button>
                         <button
-                          id="open-save-workflow-modal"
                           type="button"
-                          phx-click="open_save_workflow_modal"
+                          class={config_tab_class(@config_view, "yaml")}
+                          phx-click="switch_config_view"
+                          phx-value-view="yaml"
                         >
-                          <%= save_button_label(@workflow_target) %>
+                          YAML
                         </button>
                       </div>
-                    </form>
+
+                      <div class="config-toolbar-meta">
+                        <p class="config-studio-copy"><%= workflow_editor_copy(@workflow_target) %></p>
+                        <div class="config-file-meta">
+                          <%= if pipeline_editor_target?(@workflow_target) do %>
+                            <span class="config-file-item mono" title={@workflow_pipeline_config_path}>pipeline.yaml</span>
+                            <span class="config-file-item mono" title={@workflow_path}>WORKFLOW.md</span>
+                          <% else %>
+                            <span class="config-file-item mono" title={@workflow_path}><%= Path.basename(@workflow_path) %></span>
+                          <% end %>
+                          <span :if={@workflow_dirty} class="config-inline-status">未保存</span>
+                        </div>
+                      </div>
+
+                      <form
+                        id="workflow-save-form"
+                        class="workflow-save-form"
+                        phx-hook="WorkflowEditor"
+                        data-save-shortcut="meta+s,ctrl+s"
+                      >
+                        <input type="hidden" name="workflow[body]" value={@workflow_body} />
+
+                        <div class="editor-actions editor-actions-outside workflow-action-group">
+                          <button type="button" class="secondary" phx-click="reload_workflow">
+                            重载
+                          </button>
+                          <button
+                            id="open-save-workflow-modal"
+                            type="button"
+                            phx-click="open_save_workflow_modal"
+                          >
+                            <%= save_button_label(@workflow_target) %>
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+
+                    <div
+                      :if={@config_view == "structured"}
+                      class="config-module-tab-row"
+                      role="tablist"
+                      aria-label="配置模块"
+                    >
+                      <button
+                        :for={module <- @config_modules}
+                        id={"config-module-tab-#{module.id}"}
+                        type="button"
+                        role="tab"
+                        class={config_module_tab_class(@config_module, module.id)}
+                        aria-selected={to_string(@config_module == module.id)}
+                        aria-controls={"config-module-panel-#{module.id}"}
+                        phx-click="switch_config_module"
+                        phx-value-module={module.id}
+                      >
+                        <span class="config-module-tab-title"><%= module.label %></span>
+                        <span class="config-module-tab-copy"><%= module.copy %></span>
+                      </button>
+                    </div>
                   </div>
 
                   <div :if={@workflow_feedback} class={workflow_feedback_class(@workflow_feedback.kind)}>
@@ -528,319 +508,366 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     <span><%= @workflow_feedback.message %></span>
                   </div>
 
-                  <div class="workflow-meta-grid">
-                    <article class="workflow-meta-card">
-                      <p class="workflow-meta-label">草稿统计</p>
-                      <p class="workflow-meta-value numeric"><%= @workflow_stats.line_count %> 行</p>
-                      <p class="workflow-meta-copy">字符 <span class="mono"><%= @workflow_stats.char_count %></span> · YAML <span class="mono"><%= @workflow_stats.yaml_lines %></span> · Prompt <span class="mono"><%= @workflow_stats.prompt_lines %></span></p>
-                    </article>
-
-                    <article class="workflow-meta-card workflow-meta-card-manifest">
-                      <p class="workflow-meta-label">变更清单</p>
-                      <%= if @workflow_change_manifest == [] do %>
-                        <p class="workflow-empty-note">当前草稿和已装载配置一致。</p>
-                      <% else %>
-                        <div class="workflow-change-list">
-                          <div :for={item <- @workflow_change_manifest} class="workflow-change-item">
-                            <span class="workflow-change-label"><%= item.label %></span>
-                            <span class="workflow-change-arrow"><%= item.before %> -> <%= item.after %></span>
-                          </div>
-                        </div>
-                      <% end %>
-                    </article>
-                  </div>
-
                   <div class="config-panel-stack">
-                  <section class={config_panel_class(@config_view, "structured")} role="tabpanel" aria-label="结构化配置">
-                    <span hidden>结构化字段</span>
-                    <form id="workflow-structured-form" class="structured-form" phx-change="workflow_form_changed">
-                      <div class="structured-grid">
-                  <section class="structured-card">
-                    <div class="structured-card-header">
-                      <p class="structured-card-kicker">pipeline</p>
-                      <h3 class="structured-card-title">启用</h3>
-                      <p class="structured-card-copy">控制这条 pipeline 是否启用。关闭后配置仍保留在磁盘上，但不会参与轮询和调度。</p>
-                    </div>
-
-                    <div class="structured-field">
-                      <span class="structured-label">enabled</span>
-                      <span class="structured-help">启用后参与当前宿主的轮询和调度；关闭后仅保留配置，不会启动对应 orchestrator。</span>
-                      <input type="hidden" name="workflow_form[pipeline_enabled]" value="false" />
-                      <label class="structured-switch">
-                        <span class="structured-switch-text">关闭</span>
-                        <span class="structured-switch-control">
-                          <input
-                            type="checkbox"
-                            name="workflow_form[pipeline_enabled]"
-                            value="true"
-                            checked={truthy_param?(Map.get(@workflow_form, "pipeline_enabled"))}
-                          />
-                          <span class="structured-switch-track"></span>
-                          <span class="structured-switch-thumb"></span>
-                        </span>
-                        <span class="structured-switch-text">启用</span>
-                      </label>
-                    </div>
-                  </section>
-
-                  <section class="structured-card">
-                    <div class="structured-card-header">
-                      <p class="structured-card-kicker">tracker</p>
-                      <h3 class="structured-card-title">追踪器</h3>
-                      <p class="structured-card-copy">决定 Symphony 去哪里拉任务、用什么身份访问，以及哪些状态会被视为需要继续编排。</p>
-                    </div>
-
-                    <div class="structured-field">
-                      <span class="structured-label">kind</span>
-                      <span class="structured-help">当前配置区固定使用 Linear 作为任务源；这里展示的是当前生效的 tracker 类型。</span>
-                      <input type="hidden" name="workflow_form[tracker_kind]" value="linear" />
-                      <div class="structured-choice-row">
-                        <button
-                          type="button"
-                          class={structured_option_class("linear", "linear")}
-                        >
-                          Linear
-                        </button>
-                      </div>
-                    </div>
-
-                    <label class="structured-field">
-                      <span class="structured-label">project slug</span>
-                      <span class="structured-help">决定 Symphony 连接哪个 Linear project，并据此拉取和更新 issue。</span>
-                      <input class="structured-input" type="text" name="workflow_form[tracker_project_slug]" value={Map.get(@workflow_form, "tracker_project_slug")} />
-                    </label>
-
-                    <label class="structured-field">
-                      <span class="structured-label">api key</span>
-                      <span class="structured-help">优先使用这里的值；留空则回退到环境变量 `LINEAR_API_KEY`。</span>
-                      <input class="structured-input" type="text" name="workflow_form[tracker_api_key]" value={Map.get(@workflow_form, "tracker_api_key")} />
-                    </label>
-
-                    <label class="structured-field">
-                      <span class="structured-label">endpoint</span>
-                      <span class="structured-help">Linear GraphQL 接口地址。通常保持默认即可，只有代理或自建转发时才需要改。</span>
-                      <input class="structured-input" type="text" name="workflow_form[tracker_endpoint]" value={Map.get(@workflow_form, "tracker_endpoint")} />
-                    </label>
-
-                    <label class="structured-field">
-                      <span class="structured-label">active states</span>
-                      <span class="structured-help">只有这些状态的 issue 会被 orchestrator 持续轮询和调度，使用逗号分隔。</span>
-                      <input class="structured-input" type="text" name="workflow_form[tracker_active_states]" value={Map.get(@workflow_form, "tracker_active_states")} />
-                      <div class="structured-chip-row">
-                        <span :for={value <- state_chip_values(Map.get(@workflow_form, "tracker_active_states"))} class="structured-chip"><%= value %></span>
-                      </div>
-                    </label>
-
-                    <label class="structured-field">
-                      <span class="structured-label">terminal states</span>
-                      <span class="structured-help">进入这些状态后，Symphony 会把任务视为终态，不再继续调度，必要时还会清理 workspace。</span>
-                      <input class="structured-input" type="text" name="workflow_form[tracker_terminal_states]" value={Map.get(@workflow_form, "tracker_terminal_states")} />
-                      <div class="structured-chip-row structured-chip-row-muted">
-                        <span :for={value <- state_chip_values(Map.get(@workflow_form, "tracker_terminal_states"))} class="structured-chip structured-chip-muted"><%= value %></span>
-                      </div>
-                    </label>
-                  </section>
-
-                  <section class="structured-card">
-                    <div class="structured-card-header">
-                      <p class="structured-card-kicker">runtime</p>
-                      <h3 class="structured-card-title">调度</h3>
-                      <p class="structured-card-copy">控制 orchestrator 轮询节奏、并发上限和失败回退范围，决定系统整体吞吐方式。</p>
-                    </div>
-
-                    <label class="structured-field">
-                      <span class="structured-label">workspace root</span>
-                      <span class="structured-help">每个 issue 对应 workspace 的根目录。agent 的代码操作都会落在这个路径下面。</span>
-                      <input class="structured-input" type="text" name="workflow_form[workspace_root]" value={Map.get(@workflow_form, "workspace_root")} />
-                    </label>
-
-                    <label class="structured-field">
-                      <span class="structured-label">poll interval (ms)</span>
-                      <span class="structured-help">控制 orchestrator 轮询 tracker 的频率；值越小越灵敏，但请求和调度开销也更高。</span>
-                      <input class="structured-input" type="number" name="workflow_form[polling_interval_ms]" value={Map.get(@workflow_form, "polling_interval_ms")} />
-                    </label>
-
-                    <label class="structured-field">
-                      <span class="structured-label">max concurrent agents</span>
-                      <span class="structured-help">限制同一时间最多能并行运行多少个 agent，用来控制整体资源占用。</span>
-                      <input class="structured-input" type="number" name="workflow_form[agent_max_concurrent_agents]" value={Map.get(@workflow_form, "agent_max_concurrent_agents")} />
-                    </label>
-
-                    <label class="structured-field">
-                      <span class="structured-label">max turns</span>
-                      <span class="structured-help">限制单个 issue 在一次连续运行里最多能推进多少个 turn，避免长任务无限占用会话。</span>
-                      <input class="structured-input" type="number" name="workflow_form[agent_max_turns]" value={Map.get(@workflow_form, "agent_max_turns")} />
-                    </label>
-
-                    <label class="structured-field">
-                      <span class="structured-label">max retry backoff (ms)</span>
-                      <span class="structured-help">设置失败重试的最大退避上限，避免错误任务在异常情况下退得过慢或无限拉长。</span>
-                      <input class="structured-input" type="number" name="workflow_form[agent_max_retry_backoff_ms]" value={Map.get(@workflow_form, "agent_max_retry_backoff_ms")} />
-                    </label>
-                  </section>
-
-                  <section class="structured-card">
-                    <div class="structured-card-header">
-                      <p class="structured-card-kicker">codex</p>
-                      <h3 class="structured-card-title">执行器</h3>
-                      <p class="structured-card-copy">决定每次会话如何启动 Codex、给它什么权限，以及多久才算真正卡住。</p>
-                    </div>
-
-                    <label class="structured-field">
-                      <span class="structured-label">command</span>
-                      <span class="structured-help">实际启动 Codex app-server 的命令行。模型、配置项和运行参数都在这里决定。</span>
-                      <textarea class="structured-textarea structured-textarea-compact mono" name="workflow_form[codex_command]"><%= Map.get(@workflow_form, "codex_command") %></textarea>
-                    </label>
-
-                    <div class="structured-field">
-                      <span class="structured-label">thread sandbox</span>
-                      <span class="structured-help">决定整条会话线程默认拥有哪些文件系统权限；权限越高，自主性越强，风险也越高。</span>
-                      <div class="structured-choice-row structured-choice-row-stack">
-                        <button
-                          type="button"
-                          class={structured_option_class(Map.get(@workflow_form, "codex_thread_sandbox"), "read-only")}
-                          phx-click="workflow_form_preset"
-                          phx-value-field="codex_thread_sandbox"
-                          phx-value-value="read-only"
-                        >
-                          Read Only
-                        </button>
-                        <button
-                          type="button"
-                          class={structured_option_class(Map.get(@workflow_form, "codex_thread_sandbox"), "workspace-write")}
-                          phx-click="workflow_form_preset"
-                          phx-value-field="codex_thread_sandbox"
-                          phx-value-value="workspace-write"
-                        >
-                          Workspace Write
-                        </button>
-                        <button
-                          type="button"
-                          class={structured_option_class(Map.get(@workflow_form, "codex_thread_sandbox"), "danger-full-access")}
-                          phx-click="workflow_form_preset"
-                          phx-value-field="codex_thread_sandbox"
-                          phx-value-value="danger-full-access"
-                        >
-                          Danger Full Access
-                        </button>
-                      </div>
-                    </div>
-
-                    <label class="structured-field">
-                      <span class="structured-label">stall timeout (ms)</span>
-                      <span class="structured-help">如果会话长时间没有新进展，会被判定为 stalled 并交还给 orchestrator 处理。</span>
-                      <input class="structured-input" type="number" name="workflow_form[codex_stall_timeout_ms]" value={Map.get(@workflow_form, "codex_stall_timeout_ms")} />
-                    </label>
-                  </section>
-
-                  <section class="structured-card structured-card-hooks">
-                    <div class="structured-card-header">
-                      <p class="structured-card-kicker">hooks</p>
-                      <h3 class="structured-card-title">Hooks</h3>
-                      <p class="structured-card-copy">这几步是 Symphony 在 workspace 生命周期里自动执行的脚本节点，适合放仓库初始化、验证和清理动作。</p>
-                    </div>
-
-                    <label class="structured-field">
-                      <span class="structured-label">after create</span>
-                      <span class="structured-help">创建 workspace 后立刻执行。常用于 `git clone`、安装依赖、准备基础环境。</span>
-                      <textarea class="structured-textarea structured-textarea-hook mono" name="workflow_form[hooks_after_create]"><%= Map.get(@workflow_form, "hooks_after_create") %></textarea>
-                    </label>
-
-                    <label class="structured-field">
-                      <span class="structured-label">before run</span>
-                      <span class="structured-help">每次 agent 真正开始跑任务前执行。适合做轻量同步、预检查或生成上下文文件。</span>
-                      <textarea class="structured-textarea structured-textarea-compact mono" name="workflow_form[hooks_before_run]"><%= Map.get(@workflow_form, "hooks_before_run") %></textarea>
-                    </label>
-
-                    <label class="structured-field">
-                      <span class="structured-label">after run</span>
-                      <span class="structured-help">一次任务运行结束后执行。适合收尾验证、补充产物或导出报告。</span>
-                      <textarea class="structured-textarea structured-textarea-compact mono" name="workflow_form[hooks_after_run]"><%= Map.get(@workflow_form, "hooks_after_run") %></textarea>
-                    </label>
-
-                    <label class="structured-field">
-                      <span class="structured-label">before remove</span>
-                      <span class="structured-help">workspace 被删除前执行。适合做清理、归档或临时文件回收。</span>
-                      <textarea class="structured-textarea structured-textarea-compact mono" name="workflow_form[hooks_before_remove]"><%= Map.get(@workflow_form, "hooks_before_remove") %></textarea>
-                    </label>
-
-                    <label class="structured-field">
-                      <span class="structured-label">hook timeout (ms)</span>
-                      <span class="structured-help">限制单个 hook 最长运行时间，避免安装或脚本卡住整个编排流程。</span>
-                      <input class="structured-input" type="number" name="workflow_form[hooks_timeout_ms]" value={Map.get(@workflow_form, "hooks_timeout_ms")} />
-                    </label>
-                  </section>
-
-                  <section class="structured-card structured-card-prompt">
-                    <div class="structured-card-header">
-                      <p class="structured-card-kicker">prompt</p>
-                      <h3 class="structured-card-title">任务模版</h3>
-                      <p class="structured-card-copy">这是发给每个任务 agent 的核心执行说明，会和 issue 上下文一起组成实际 prompt。</p>
-                    </div>
-
-                    <label class="structured-field">
-                      <span class="structured-label">prompt template</span>
-                      <span class="structured-help">定义 agent 的默认工作方式、状态流转要求和项目规则。这里的改动会直接影响后续新任务的行为。</span>
-                      <div
-                        id="prompt-template-layout"
-                        class="structured-markdown-layout"
-                        phx-hook="MarkdownScrollSync"
-                      >
-                        <div class="structured-markdown-shell structured-markdown-shell-editor">
-                          <div class="structured-markdown-toolbar">
-                            <span class="structured-markdown-kicker">Markdown Source</span>
-                            <span class="structured-markdown-hint">左侧直接编辑</span>
-                          </div>
-
-                          <textarea
-                            class="structured-textarea structured-markdown-editor mono"
-                            name="workflow_form[prompt_template]"
-                            data-scroll-sync-source="editor"
-                            spellcheck="false"
-                          ><%= Map.get(@workflow_form, "prompt_template") %></textarea>
-                        </div>
-
-                        <div class="structured-markdown-shell structured-markdown-shell-preview">
-                          <div class="structured-markdown-toolbar">
-                            <span class="structured-markdown-kicker">Markdown Preview</span>
-                            <span class="structured-markdown-hint">右侧实时预览</span>
-                          </div>
-
-                          <div class="structured-markdown-preview" data-scroll-sync-source="preview">
-                            <%= markdown_preview_html(Map.get(@workflow_form, "prompt_template")) %>
-                          </div>
-                        </div>
-                      </div>
-                    </label>
-
-                    <div class="structured-field">
-                      <span class="structured-label">preview behavior</span>
-                      <span class="structured-help">左边固定编辑，右边实时预览。外层保持单页高度，两个面板都在内部滚动，不再因为切换模式闪烁。</span>
-                    </div>
-                  </section>
-                      </div>
-                    </form>
-                  </section>
-
-                  <section class={config_panel_class(@config_view, "yaml")} role="tabpanel" aria-label="YAML 配置">
-                    <form
-                      id="workflow-editor-form"
-                      class="workflow-form"
-                      phx-change="workflow_changed"
-                      phx-submit="save_workflow"
+                    <section
+                      class={config_panel_class(@config_view, "structured")}
+                      role="tabpanel"
+                      aria-label="结构化配置"
                     >
-                      <textarea
-                        id="workflow-editor"
-                        name="workflow[body]"
-                        class="workflow-editor mono"
-                        spellcheck="false"
-                        autocapitalize="off"
-                        autocomplete="off"
-                        autocorrect="off"
-                      ><%= @workflow_body %></textarea>
-                    </form>
-                  </section>
-                </div>
+                      <span hidden>结构化字段</span>
+                      <form
+                        id="workflow-structured-form"
+                        class="structured-form"
+                        phx-change="workflow_form_changed"
+                      >
+                        <div class="structured-grid structured-grid-modules">
+                          <section
+                            id="config-module-panel-pipeline"
+                            class="config-module-panel"
+                            role="tabpanel"
+                            aria-labelledby="config-module-tab-pipeline"
+                            hidden={@config_module != "pipeline"}
+                          >
+                            <section class="structured-card">
+                              <div class="structured-card-header">
+                                <p class="structured-card-kicker">pipeline</p>
+                                <h3 class="structured-card-title">启用</h3>
+                                <p class="structured-card-copy">控制这条 pipeline 是否启用。关闭后配置仍保留在磁盘上，但不会参与轮询和调度。</p>
+                              </div>
+
+                              <div class="structured-field">
+                                <span class="structured-label">enabled</span>
+                                <span class="structured-help">启用后参与当前宿主的轮询和调度；关闭后仅保留配置，不会启动对应 orchestrator。</span>
+                                <input type="hidden" name="workflow_form[pipeline_enabled]" value="false" />
+                                <label class="structured-switch">
+                                  <span class="structured-switch-text">关闭</span>
+                                  <span class="structured-switch-control">
+                                    <input
+                                      type="checkbox"
+                                      name="workflow_form[pipeline_enabled]"
+                                      value="true"
+                                      checked={truthy_param?(Map.get(@workflow_form, "pipeline_enabled"))}
+                                    />
+                                    <span class="structured-switch-track"></span>
+                                    <span class="structured-switch-thumb"></span>
+                                  </span>
+                                  <span class="structured-switch-text">启用</span>
+                                </label>
+                              </div>
+                            </section>
+                          </section>
+
+                          <section
+                            id="config-module-panel-tracker"
+                            class="config-module-panel"
+                            role="tabpanel"
+                            aria-labelledby="config-module-tab-tracker"
+                            hidden={@config_module != "tracker"}
+                          >
+                            <section class="structured-card">
+                              <div class="structured-card-header">
+                                <p class="structured-card-kicker">tracker</p>
+                                <h3 class="structured-card-title">追踪器</h3>
+                                <p class="structured-card-copy">决定 Symphony 去哪里拉任务、用什么身份访问，以及哪些状态会被视为需要继续编排。</p>
+                              </div>
+
+                              <div class="structured-field">
+                                <span class="structured-label">kind</span>
+                                <span class="structured-help">当前配置区固定使用 Linear 作为任务源；这里展示的是当前生效的 tracker 类型。</span>
+                                <input type="hidden" name="workflow_form[tracker_kind]" value="linear" />
+                                <div class="structured-choice-row">
+                                  <button
+                                    type="button"
+                                    class={structured_option_class("linear", "linear")}
+                                  >
+                                    Linear
+                                  </button>
+                                </div>
+                              </div>
+
+                              <label class="structured-field">
+                                <span class="structured-label">project slug</span>
+                                <span class="structured-help">决定 Symphony 连接哪个 Linear project，并据此拉取和更新 issue。</span>
+                                <input class="structured-input" type="text" name="workflow_form[tracker_project_slug]" value={Map.get(@workflow_form, "tracker_project_slug")} />
+                              </label>
+
+                              <details class="structured-advanced" open={tracker_advanced_open?(@workflow_form)}>
+                                <summary class="structured-advanced-summary">
+                                  <span class="structured-advanced-title">高级配置</span>
+                                  <span class="structured-advanced-copy">默认建议使用系统环境变量，只有特殊场景再展开覆盖。</span>
+                                </summary>
+
+                                <div class="structured-advanced-body">
+                                  <label class="structured-field">
+                                    <span class="structured-label">api key</span>
+                                    <span class="structured-help">默认从系统环境变量 `LINEAR_API_KEY` 读取。只有你想覆盖当前机器的默认值时，才需要在这里填写。</span>
+                                    <input class="structured-input" type="password" name="workflow_form[tracker_api_key]" value={Map.get(@workflow_form, "tracker_api_key")} />
+                                  </label>
+
+                                  <label class="structured-field">
+                                    <span class="structured-label">endpoint</span>
+                                    <span class="structured-help">默认使用 Linear 官方 GraphQL endpoint。只有代理、网关或自建转发场景才需要改这里。</span>
+                                    <input class="structured-input" type="text" name="workflow_form[tracker_endpoint]" value={Map.get(@workflow_form, "tracker_endpoint")} />
+                                  </label>
+                                </div>
+                              </details>
+
+                              <label class="structured-field">
+                                <span class="structured-label">active states</span>
+                                <span class="structured-help">只有这些状态的 issue 会被 orchestrator 持续轮询和调度，使用逗号分隔。</span>
+                                <input class="structured-input" type="text" name="workflow_form[tracker_active_states]" value={Map.get(@workflow_form, "tracker_active_states")} />
+                                <div class="structured-chip-row">
+                                  <span :for={value <- state_chip_values(Map.get(@workflow_form, "tracker_active_states"))} class="structured-chip"><%= value %></span>
+                                </div>
+                              </label>
+
+                              <label class="structured-field">
+                                <span class="structured-label">terminal states</span>
+                                <span class="structured-help">进入这些状态后，Symphony 会把任务视为终态，不再继续调度，必要时还会清理 workspace。</span>
+                                <input class="structured-input" type="text" name="workflow_form[tracker_terminal_states]" value={Map.get(@workflow_form, "tracker_terminal_states")} />
+                                <div class="structured-chip-row structured-chip-row-muted">
+                                  <span :for={value <- state_chip_values(Map.get(@workflow_form, "tracker_terminal_states"))} class="structured-chip structured-chip-muted"><%= value %></span>
+                                </div>
+                              </label>
+                            </section>
+                          </section>
+
+                          <section
+                            id="config-module-panel-runtime"
+                            class="config-module-panel"
+                            role="tabpanel"
+                            aria-labelledby="config-module-tab-runtime"
+                            hidden={@config_module != "runtime"}
+                          >
+                            <section class="structured-card">
+                              <div class="structured-card-header">
+                                <p class="structured-card-kicker">runtime</p>
+                                <h3 class="structured-card-title">调度</h3>
+                                <p class="structured-card-copy">控制 orchestrator 轮询节奏、并发上限和失败回退范围，决定系统整体吞吐方式。</p>
+                              </div>
+
+                              <label class="structured-field">
+                                <span class="structured-label">workspace root</span>
+                                <span class="structured-help">每个 issue 对应 workspace 的根目录。agent 的代码操作都会落在这个路径下面。</span>
+                                <input class="structured-input" type="text" name="workflow_form[workspace_root]" value={Map.get(@workflow_form, "workspace_root")} />
+                              </label>
+
+                              <label class="structured-field">
+                                <span class="structured-label">poll interval (ms)</span>
+                                <span class="structured-help">控制 orchestrator 轮询 tracker 的频率；值越小越灵敏，但请求和调度开销也更高。</span>
+                                <input class="structured-input" type="number" name="workflow_form[polling_interval_ms]" value={Map.get(@workflow_form, "polling_interval_ms")} />
+                              </label>
+
+                              <label class="structured-field">
+                                <span class="structured-label">max concurrent agents</span>
+                                <span class="structured-help">限制同一时间最多能并行运行多少个 agent，用来控制整体资源占用。</span>
+                                <input class="structured-input" type="number" name="workflow_form[agent_max_concurrent_agents]" value={Map.get(@workflow_form, "agent_max_concurrent_agents")} />
+                              </label>
+
+                              <label class="structured-field">
+                                <span class="structured-label">max turns</span>
+                                <span class="structured-help">限制单个 issue 在一次连续运行里最多能推进多少个 turn，避免长任务无限占用会话。</span>
+                                <input class="structured-input" type="number" name="workflow_form[agent_max_turns]" value={Map.get(@workflow_form, "agent_max_turns")} />
+                              </label>
+
+                              <label class="structured-field">
+                                <span class="structured-label">max retry backoff (ms)</span>
+                                <span class="structured-help">设置失败重试的最大退避上限，避免错误任务在异常情况下退得过慢或无限拉长。</span>
+                                <input class="structured-input" type="number" name="workflow_form[agent_max_retry_backoff_ms]" value={Map.get(@workflow_form, "agent_max_retry_backoff_ms")} />
+                              </label>
+                            </section>
+                          </section>
+
+                          <section
+                            id="config-module-panel-codex"
+                            class="config-module-panel"
+                            role="tabpanel"
+                            aria-labelledby="config-module-tab-codex"
+                            hidden={@config_module != "codex"}
+                          >
+                            <section class="structured-card">
+                              <div class="structured-card-header">
+                                <p class="structured-card-kicker">codex</p>
+                                <h3 class="structured-card-title">执行器</h3>
+                                <p class="structured-card-copy">决定每次会话如何启动 Codex、给它什么权限，以及多久才算真正卡住。</p>
+                              </div>
+
+                              <label class="structured-field">
+                                <span class="structured-label">command</span>
+                                <span class="structured-help">实际启动 Codex app-server 的命令行。模型、配置项和运行参数都在这里决定。</span>
+                                <textarea class="structured-textarea structured-textarea-compact mono" name="workflow_form[codex_command]"><%= Map.get(@workflow_form, "codex_command") %></textarea>
+                              </label>
+
+                              <div class="structured-field">
+                                <span class="structured-label">thread sandbox</span>
+                                <span class="structured-help">决定整条会话线程默认拥有哪些文件系统权限；权限越高，自主性越强，风险也越高。</span>
+                                <div class="structured-choice-row structured-choice-row-stack">
+                                  <button
+                                    type="button"
+                                    class={structured_option_class(Map.get(@workflow_form, "codex_thread_sandbox"), "read-only")}
+                                    phx-click="workflow_form_preset"
+                                    phx-value-field="codex_thread_sandbox"
+                                    phx-value-value="read-only"
+                                  >
+                                    Read Only
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class={structured_option_class(Map.get(@workflow_form, "codex_thread_sandbox"), "workspace-write")}
+                                    phx-click="workflow_form_preset"
+                                    phx-value-field="codex_thread_sandbox"
+                                    phx-value-value="workspace-write"
+                                  >
+                                    Workspace Write
+                                  </button>
+                                  <button
+                                    type="button"
+                                    class={structured_option_class(Map.get(@workflow_form, "codex_thread_sandbox"), "danger-full-access")}
+                                    phx-click="workflow_form_preset"
+                                    phx-value-field="codex_thread_sandbox"
+                                    phx-value-value="danger-full-access"
+                                  >
+                                    Danger Full Access
+                                  </button>
+                                </div>
+                              </div>
+
+                              <label class="structured-field">
+                                <span class="structured-label">stall timeout (ms)</span>
+                                <span class="structured-help">如果会话长时间没有新进展，会被判定为 stalled 并交还给 orchestrator 处理。</span>
+                                <input class="structured-input" type="number" name="workflow_form[codex_stall_timeout_ms]" value={Map.get(@workflow_form, "codex_stall_timeout_ms")} />
+                              </label>
+                            </section>
+                          </section>
+
+                          <section
+                            id="config-module-panel-hooks"
+                            class="config-module-panel"
+                            role="tabpanel"
+                            aria-labelledby="config-module-tab-hooks"
+                            hidden={@config_module != "hooks"}
+                          >
+                            <section class="structured-card structured-card-hooks">
+                              <div class="structured-card-header">
+                                <p class="structured-card-kicker">hooks</p>
+                                <h3 class="structured-card-title">Hooks</h3>
+                                <p class="structured-card-copy">这几步是 Symphony 在 workspace 生命周期里自动执行的脚本节点，适合放仓库初始化、验证和清理动作。</p>
+                              </div>
+
+                              <label class="structured-field">
+                                <span class="structured-label">after create</span>
+                                <span class="structured-help">创建 workspace 后立刻执行。常用于 `git clone`、安装依赖、准备基础环境。</span>
+                                <textarea class="structured-textarea structured-textarea-hook mono" name="workflow_form[hooks_after_create]"><%= Map.get(@workflow_form, "hooks_after_create") %></textarea>
+                              </label>
+
+                              <label class="structured-field">
+                                <span class="structured-label">before run</span>
+                                <span class="structured-help">每次 agent 真正开始跑任务前执行。适合做轻量同步、预检查或生成上下文文件。</span>
+                                <textarea class="structured-textarea structured-textarea-compact mono" name="workflow_form[hooks_before_run]"><%= Map.get(@workflow_form, "hooks_before_run") %></textarea>
+                              </label>
+
+                              <label class="structured-field">
+                                <span class="structured-label">after run</span>
+                                <span class="structured-help">一次任务运行结束后执行。适合收尾验证、补充产物或导出报告。</span>
+                                <textarea class="structured-textarea structured-textarea-compact mono" name="workflow_form[hooks_after_run]"><%= Map.get(@workflow_form, "hooks_after_run") %></textarea>
+                              </label>
+
+                              <label class="structured-field">
+                                <span class="structured-label">before remove</span>
+                                <span class="structured-help">workspace 被删除前执行。适合做清理、归档或临时文件回收。</span>
+                                <textarea class="structured-textarea structured-textarea-compact mono" name="workflow_form[hooks_before_remove]"><%= Map.get(@workflow_form, "hooks_before_remove") %></textarea>
+                              </label>
+
+                              <label class="structured-field">
+                                <span class="structured-label">hook timeout (ms)</span>
+                                <span class="structured-help">限制单个 hook 最长运行时间，避免安装或脚本卡住整个编排流程。</span>
+                                <input class="structured-input" type="number" name="workflow_form[hooks_timeout_ms]" value={Map.get(@workflow_form, "hooks_timeout_ms")} />
+                              </label>
+                            </section>
+                          </section>
+
+                          <section
+                            id="config-module-panel-prompt"
+                            class="config-module-panel"
+                            role="tabpanel"
+                            aria-labelledby="config-module-tab-prompt"
+                            hidden={@config_module != "prompt"}
+                          >
+                            <section class="structured-card structured-card-prompt">
+                              <div class="structured-card-header">
+                                <p class="structured-card-kicker">prompt</p>
+                                <h3 class="structured-card-title">任务模版</h3>
+                                <p class="structured-card-copy">这是发给每个任务 agent 的核心执行说明，会和 issue 上下文一起组成实际 prompt。</p>
+                              </div>
+
+                              <label class="structured-field">
+                                <span class="structured-label">prompt template</span>
+                                <span class="structured-help">定义 agent 的默认工作方式、状态流转要求和项目规则。这里的改动会直接影响后续新任务的行为。</span>
+                                <div
+                                  id="prompt-template-layout"
+                                  class="structured-markdown-layout"
+                                  phx-hook="MarkdownScrollSync"
+                                >
+                                  <div class="structured-markdown-shell structured-markdown-shell-editor">
+                                    <div class="structured-markdown-toolbar">
+                                      <span class="structured-markdown-kicker">Markdown Source</span>
+                                      <span class="structured-markdown-hint">左侧直接编辑</span>
+                                    </div>
+
+                                    <textarea
+                                      class="structured-textarea structured-markdown-editor mono"
+                                      name="workflow_form[prompt_template]"
+                                      data-scroll-sync-source="editor"
+                                      spellcheck="false"
+                                    ><%= Map.get(@workflow_form, "prompt_template") %></textarea>
+                                  </div>
+
+                                  <div class="structured-markdown-shell structured-markdown-shell-preview">
+                                    <div class="structured-markdown-toolbar">
+                                      <span class="structured-markdown-kicker">Markdown Preview</span>
+                                      <span class="structured-markdown-hint">右侧实时预览</span>
+                                    </div>
+
+                                    <div class="structured-markdown-preview" data-scroll-sync-source="preview">
+                                      <%= markdown_preview_html(Map.get(@workflow_form, "prompt_template")) %>
+                                    </div>
+                                  </div>
+                                </div>
+                              </label>
+
+                              <div class="structured-field">
+                                <span class="structured-label">preview behavior</span>
+                                <span class="structured-help">左边固定编辑，右边实时预览。外层保持单页高度，两个面板都在内部滚动，不再因为切换模式闪烁。</span>
+                              </div>
+                            </section>
+                          </section>
+                        </div>
+                      </form>
+                    </section>
+
+                    <section
+                      class={config_panel_class(@config_view, "yaml")}
+                      role="tabpanel"
+                      aria-label="YAML 配置"
+                    >
+                      <form
+                        id="workflow-editor-form"
+                        class="workflow-form"
+                        phx-change="workflow_changed"
+                        phx-submit="save_workflow"
+                      >
+                        <textarea
+                          id="workflow-editor"
+                          name="workflow[body]"
+                          class="workflow-editor mono"
+                          spellcheck="false"
+                          autocapitalize="off"
+                          autocomplete="off"
+                          autocorrect="off"
+                        ><%= @workflow_body %></textarea>
+                      </form>
+                    </section>
+                  </div>
                 </section>
 
               </div>
@@ -1601,6 +1628,11 @@ defmodule SymphonyElixirWeb.DashboardLive do
     if active_view == view, do: "#{base} config-tab-active", else: base
   end
 
+  defp config_module_tab_class(active_module, module_id) do
+    base = "config-module-tab"
+    if active_module == module_id, do: "#{base} config-module-tab-active", else: base
+  end
+
   defp config_panel_class(active_view, view) do
     base = "config-panel"
     if active_view == view, do: base, else: "#{base} config-panel-hidden"
@@ -1611,6 +1643,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp normalize_config_view(view) when view in ["structured", "yaml"], do: view
   defp normalize_config_view(_view), do: "structured"
+
+  defp normalize_config_module(module) when is_binary(module) do
+    if Enum.any?(@config_modules, &(&1.id == module)), do: module, else: @default_config_module
+  end
+
+  defp normalize_config_module(_module), do: @default_config_module
 
   defp panel_path("config"), do: "/panel/config"
   defp panel_path("logs"), do: "/panel/logs"
@@ -1953,7 +1991,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp build_workflow_body(workflow_loaded, workflow_form) do
     base_config =
       case workflow_loaded do
-        %{config: config} when is_map(config) -> config
+        %{config: config} when is_map(config) -> Map.delete(config, "observability")
         _ -> %{}
       end
 
@@ -2094,6 +2132,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
     enabled = pipeline_enabled_config(config, pipeline.enabled)
 
     config
+    |> Map.delete("observability")
     |> Map.put("id", pipeline.id)
     |> Map.put("enabled", enabled)
     |> Workflow.render_content("")
@@ -2243,6 +2282,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp new_pipeline_config(base_config, attrs) when is_map(base_config) and is_map(attrs) do
     base_config
+    |> Map.delete("observability")
     |> Map.put("id", attrs.id)
     |> Map.put("enabled", attrs.enabled)
     |> Map.put(
@@ -2256,18 +2296,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp pipeline_editor_target?(%{mode: :pipeline}), do: true
   defp pipeline_editor_target?(_target), do: false
-
-  defp workflow_editor_title(%{mode: :pipeline}, pipelines)
-       when is_list(pipelines) and length(pipelines) > 1,
-       do: "Pipeline Config"
-
-  defp workflow_editor_title(
-         %{mode: :pipeline, pipeline: %Pipeline{id: pipeline_id}},
-         _pipelines
-       ),
-       do: pipeline_id
-
-  defp workflow_editor_title(_target, _pipelines), do: "Pipeline Config"
 
   defp workflow_editor_copy(%{mode: :pipeline}) do
     "Edit `pipeline.yaml` and `WORKFLOW.md`."
@@ -2331,12 +2359,20 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp pipeline_payload_next_poll(_payload, _pipeline_id), do: "n/a"
 
-  defp selected_pipeline_status(payload, %{mode: :pipeline, pipeline: %Pipeline{} = pipeline}),
-    do: config_pipeline_status(payload, pipeline)
+  defp save_button_label(_target), do: "保存"
 
-  defp selected_pipeline_status(_payload, _workflow_target), do: "unconfigured"
+  defp tracker_advanced_open?(workflow_form) when is_map(workflow_form) do
+    Enum.any?(
+      ["tracker_api_key", "tracker_endpoint"],
+      &present_value?(Map.get(workflow_form, &1))
+    )
+  end
 
-  defp save_button_label(_target), do: "保存当前 pipeline"
+  defp tracker_advanced_open?(_workflow_form), do: false
+
+  defp present_value?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present_value?(nil), do: false
+  defp present_value?(_value), do: true
 
   defp reload_feedback_message(_target), do: "已从磁盘重新载入当前 pipeline 配置。"
 

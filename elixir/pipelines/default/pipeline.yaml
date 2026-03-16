@@ -34,10 +34,6 @@ hooks:
     mise trust
     mise exec -- mix deps.get
   timeout_ms: 60000
-observability:
-  dashboard_enabled: true
-  refresh_ms: 1000
-  render_interval_ms: 16
 server:
   host: "127.0.0.1"
   port: null
