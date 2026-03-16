@@ -785,8 +785,42 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     <label class="structured-field">
                       <span class="structured-label">prompt template</span>
                       <span class="structured-help">定义 agent 的默认工作方式、状态流转要求和项目规则。这里的改动会直接影响后续新任务的行为。</span>
-                      <textarea class="structured-textarea mono" name="workflow_form[prompt_template]"><%= Map.get(@workflow_form, "prompt_template") %></textarea>
+                      <div
+                        id="prompt-template-layout"
+                        class="structured-markdown-layout"
+                        phx-hook="MarkdownScrollSync"
+                      >
+                        <div class="structured-markdown-shell structured-markdown-shell-editor">
+                          <div class="structured-markdown-toolbar">
+                            <span class="structured-markdown-kicker">Markdown Source</span>
+                            <span class="structured-markdown-hint">左侧直接编辑</span>
+                          </div>
+
+                          <textarea
+                            class="structured-textarea structured-markdown-editor mono"
+                            name="workflow_form[prompt_template]"
+                            data-scroll-sync-source="editor"
+                            spellcheck="false"
+                          ><%= Map.get(@workflow_form, "prompt_template") %></textarea>
+                        </div>
+
+                        <div class="structured-markdown-shell structured-markdown-shell-preview">
+                          <div class="structured-markdown-toolbar">
+                            <span class="structured-markdown-kicker">Markdown Preview</span>
+                            <span class="structured-markdown-hint">右侧实时预览</span>
+                          </div>
+
+                          <div class="structured-markdown-preview" data-scroll-sync-source="preview">
+                            <%= markdown_preview_html(Map.get(@workflow_form, "prompt_template")) %>
+                          </div>
+                        </div>
+                      </div>
                     </label>
+
+                    <div class="structured-field">
+                      <span class="structured-label">preview behavior</span>
+                      <span class="structured-help">左边固定编辑，右边实时预览。外层保持单页高度，两个面板都在内部滚动，不再因为切换模式闪烁。</span>
+                    </div>
                   </section>
                       </div>
                     </form>
@@ -2321,6 +2355,24 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp normalize_display_value(value, _labels) when value in ["", "nil"], do: "未返回"
   defp normalize_display_value(value, labels), do: Map.get(labels, value, value)
+
+  defp markdown_preview_html(markdown) when is_binary(markdown) do
+    content =
+      if String.trim(markdown) == "" do
+        "_未提供任务模版。_"
+      else
+        markdown
+      end
+
+    html =
+      Earmark.as_html!(content,
+        escape: true,
+        smartypants: false,
+        code_class_prefix: "language-"
+      )
+
+    Phoenix.HTML.raw(html)
+  end
 
   defp pipeline_workflow_form(config) do
     %{

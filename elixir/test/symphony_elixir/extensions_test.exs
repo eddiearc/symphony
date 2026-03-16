@@ -1255,6 +1255,57 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert updated_html =~ "Structured prompt body"
   end
 
+  test "config panel renders the prompt template with a markdown preview component" do
+    orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowMarkdownPreviewOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, view, _html} = live(build_conn(), "/panel/config")
+
+    markdown_prompt = """
+    ## 执行清单
+
+    - 第一项
+    - **第二项**
+
+    ```bash
+    echo ready
+    ```
+    """
+
+    updated_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "prompt_template" => markdown_prompt
+        }
+      )
+      |> render_change()
+
+    document = Floki.parse_document!(updated_html)
+
+    markdown_kickers =
+      document
+      |> Floki.find(".structured-markdown-kicker")
+      |> Enum.map(&Floki.text/1)
+
+    assert Floki.find(document, ".structured-markdown-layout") != []
+    assert Floki.find(document, "#prompt-template-layout[phx-hook='MarkdownScrollSync']") != []
+    assert Floki.find(document, ".structured-markdown-preview") != []
+    assert Floki.find(document, "textarea.structured-markdown-editor") != []
+    assert Floki.find(document, "[data-scroll-sync-source='editor']") != []
+    assert Floki.find(document, "[data-scroll-sync-source='preview']") != []
+    assert Floki.find(document, ".structured-markdown-composer[phx-hook='MarkdownPromptEditor']") == []
+    assert markdown_kickers == ["Markdown Source", "Markdown Preview"]
+    assert Floki.text(Floki.find(document, ".structured-markdown-preview h2")) =~ "执行清单"
+    assert Floki.text(Floki.find(document, ".structured-markdown-preview ul")) =~ "第一项"
+    assert Floki.text(Floki.find(document, ".structured-markdown-preview strong")) =~ "第二项"
+    assert Floki.text(Floki.find(document, ".structured-markdown-preview pre code")) =~ "echo ready"
+  end
+
   test "config panel saves the latest structured draft even if the textarea posts stale content" do
     orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowSaveOrchestrator)
     snapshot = static_snapshot()

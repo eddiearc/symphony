@@ -300,7 +300,7 @@ defmodule SymphonyElixir.CoreTest do
     assert Map.get(hooks, "after_create") =~ "mise exec -- mix deps.get"
 
     assert String.trim(prompt) != ""
-    assert prompt =~ "你正在处理 Symphony 仓库中的 Linear 工单 `{{ issue.identifier }}`"
+    assert prompt =~ "你正在处理 Linear 工单 `{{ issue.identifier }}`"
     assert prompt =~ "这是一次无人值守的编排会话"
   end
 
@@ -1379,17 +1379,16 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(pipeline, issue, attempt: 2)
 
-    assert prompt =~ "你正在处理 Symphony 仓库中的 Linear 工单 `MT-616`"
+    assert prompt =~ "你正在处理 Linear 工单 `MT-616`"
     assert prompt =~ "工单上下文："
     assert prompt =~ "标识：MT-616"
     assert prompt =~ "标题：Use rich templates for WORKFLOW.md"
     assert prompt =~ "当前状态：In Progress"
     assert prompt =~ "https://example.org/issues/MT-616/use-rich-templates-for-workflowmd"
     assert prompt =~ "这是一次无人值守的编排会话"
-    assert prompt =~ "只有在出现真正的阻塞时才可以提前停止"
+    assert prompt =~ "只有在出现真正阻塞时才可以提前停止"
     assert prompt =~ "不要包含“给用户的下一步”"
     assert prompt =~ "这是第 #2 次重试"
-    assert prompt =~ "## Symphony 项目专属要求"
     assert prompt =~ "## 前提条件：可使用 Linear MCP 或 `linear_graphql` 工具"
   end
 

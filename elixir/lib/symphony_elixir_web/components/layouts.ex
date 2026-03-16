@@ -78,6 +78,73 @@ defmodule SymphonyElixirWeb.Layouts do
               }
             };
 
+            hooks.MarkdownScrollSync = {
+              mounted: function () {
+                this.editorPane = this.el.querySelector("[data-scroll-sync-source='editor']");
+                this.previewPane = this.el.querySelector("[data-scroll-sync-source='preview']");
+
+                if (!this.editorPane || !this.previewPane) return;
+
+                this.activeSource = null;
+                this.releaseTimer = null;
+
+                this.syncScroll = (sourcePane, targetPane, sourceName) => {
+                  var sourceScrollable = sourcePane.scrollHeight - sourcePane.clientHeight;
+                  var targetScrollable = targetPane.scrollHeight - targetPane.clientHeight;
+
+                  if (sourceScrollable <= 0 || targetScrollable <= 0) {
+                    targetPane.scrollTop = 0;
+                    return;
+                  }
+
+                  this.activeSource = sourceName;
+                  targetPane.scrollTop = (sourcePane.scrollTop / sourceScrollable) * targetScrollable;
+
+                  window.clearTimeout(this.releaseTimer);
+                  this.releaseTimer = window.setTimeout(() => {
+                    this.activeSource = null;
+                  }, 80);
+                };
+
+                this.handleEditorScroll = () => {
+                  if (this.activeSource && this.activeSource !== "editor") return;
+                  this.syncScroll(this.editorPane, this.previewPane, "editor");
+                };
+
+                this.handlePreviewScroll = () => {
+                  if (this.activeSource && this.activeSource !== "preview") return;
+                  this.syncScroll(this.previewPane, this.editorPane, "preview");
+                };
+
+                this.editorPane.addEventListener("scroll", this.handleEditorScroll, {passive: true});
+                this.previewPane.addEventListener("scroll", this.handlePreviewScroll, {passive: true});
+              },
+
+              updated: function () {
+                if (!this.editorPane || !this.previewPane) return;
+
+                if (this.activeSource === "editor") {
+                  this.syncScroll(this.editorPane, this.previewPane, "editor");
+                } else if (this.activeSource === "preview") {
+                  this.syncScroll(this.previewPane, this.editorPane, "preview");
+                }
+              },
+
+              destroyed: function () {
+                if (this.editorPane && this.handleEditorScroll) {
+                  this.editorPane.removeEventListener("scroll", this.handleEditorScroll);
+                }
+
+                if (this.previewPane && this.handlePreviewScroll) {
+                  this.previewPane.removeEventListener("scroll", this.handlePreviewScroll);
+                }
+
+                if (this.releaseTimer) {
+                  window.clearTimeout(this.releaseTimer);
+                }
+              }
+            };
+
             var liveSocket = new window.LiveView.LiveSocket("/live", window.Phoenix.Socket, {
               params: {_csrf_token: csrfToken},
               hooks: hooks
