@@ -1269,6 +1269,34 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert updated_html =~ "Structured prompt body"
   end
 
+  test "config panel groups structured modules behind horizontal tabs" do
+    orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowModuleTabsOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, view, html} = live(build_conn(), "/panel/config")
+    document = Floki.parse_document!(html)
+
+    assert Floki.find(document, "[role='tablist'][aria-label='配置模块']") != []
+    assert Floki.find(document, "#config-module-tab-pipeline[aria-selected='true']") != []
+    assert Floki.find(document, "#config-module-panel-tracker[hidden]") != []
+    assert Floki.find(document, "#config-module-panel-prompt[hidden]") != []
+
+    prompt_html =
+      view
+      |> element("#config-module-tab-prompt")
+      |> render_click()
+
+    prompt_document = Floki.parse_document!(prompt_html)
+
+    assert Floki.find(prompt_document, "#config-module-tab-prompt[aria-selected='true']") != []
+    assert Floki.find(prompt_document, "#config-module-panel-prompt[hidden]") == []
+    assert Floki.find(prompt_document, "#config-module-panel-pipeline[hidden]") != []
+  end
+
   test "config panel renders the prompt template with a markdown preview component" do
     orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowMarkdownPreviewOrchestrator)
     snapshot = static_snapshot()
