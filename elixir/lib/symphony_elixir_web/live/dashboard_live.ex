@@ -1209,34 +1209,22 @@ defmodule SymphonyElixirWeb.DashboardLive do
                       <div>
                         <p class="section-kicker">quota</p>
                         <h2 class="section-title">配额视窗</h2>
-                        <p class="section-copy">将主窗口、次窗口和 credits 折叠成更适合值班查看的中文摘要。</p>
+                        <p class="section-copy">直接展示两个限流窗口还剩多少 quota，以及何时重置。</p>
                       </div>
                     </div>
 
                     <%= if rate_limits_available?(@payload.rate_limits) do %>
                       <div class="limit-grid">
                         <article class="limit-card">
-                          <p class="limit-label">通道</p>
-                          <p class="limit-value"><%= rate_limit_identity(@payload.rate_limits) %></p>
-                          <p class="limit-copy">当前实例拿到的限流命名空间与计划类型。</p>
-                        </article>
-
-                        <article class="limit-card">
-                          <p class="limit-label">主窗口</p>
-                          <p class="limit-value numeric"><%= format_percent(primary_limit_used(@payload.rate_limits)) %></p>
+                          <p class="limit-label">主窗口剩余</p>
+                          <p class="limit-value numeric"><%= format_remaining_quota(primary_limit_bucket(@payload.rate_limits)) %></p>
                           <p class="limit-copy"><%= format_rate_window(primary_limit_bucket(@payload.rate_limits)) %></p>
                         </article>
 
                         <article class="limit-card">
-                          <p class="limit-label">次窗口</p>
-                          <p class="limit-value numeric"><%= format_percent(secondary_limit_used(@payload.rate_limits)) %></p>
+                          <p class="limit-label">次窗口剩余</p>
+                          <p class="limit-value numeric"><%= format_remaining_quota(secondary_limit_bucket(@payload.rate_limits)) %></p>
                           <p class="limit-copy"><%= format_rate_window(secondary_limit_bucket(@payload.rate_limits)) %></p>
-                        </article>
-
-                        <article class="limit-card">
-                          <p class="limit-label">Credits</p>
-                          <p class="limit-value numeric"><%= format_credits(rate_limit_value(@payload.rate_limits, :credits)) %></p>
-                          <p class="limit-copy">若上游未返回该字段，这里会明确标记为未返回。</p>
                         </article>
                       </div>
                     <% else %>
@@ -1467,34 +1455,62 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
   defp display_timestamp(timestamp), do: timestamp |> to_string()
 
-  defp rate_limits_available?(rate_limits), do: is_map(rate_limits) and map_size(rate_limits) > 0
+  defp rate_limits_available?(rate_limits) when is_map(rate_limits) do
+    Enum.any?([primary_limit_bucket(rate_limits), secondary_limit_bucket(rate_limits)], fn
+      bucket when is_map(bucket) -> map_size(bucket) > 0
+      _bucket -> false
+    end)
+  end
+
+  defp rate_limits_available?(_rate_limits), do: false
 
   defp refresh_log_payload(socket) do
     payload = Map.put(socket.assigns.payload, :logs, Presenter.logs_payload())
     assign(socket, :payload, payload)
   end
 
-  defp rate_limit_identity(rate_limits) do
-    [
-      rate_limit_value(rate_limits, [:limit_name]),
-      rate_limit_value(rate_limits, [:limit_id]),
-      rate_limit_value(rate_limits, [:plan_type, :planType])
-    ]
-    |> Enum.filter(&(is_binary(&1) and String.trim(&1) != ""))
-    |> case do
-      [] -> "未返回"
-      values -> Enum.join(values, " / ")
-    end
-  end
-
   defp primary_limit_bucket(rate_limits), do: rate_limit_value(rate_limits, :primary)
   defp secondary_limit_bucket(rate_limits), do: rate_limit_value(rate_limits, :secondary)
 
-  defp primary_limit_used(rate_limits),
-    do: rate_limit_value(primary_limit_bucket(rate_limits), [:used_percent, :usedPercent])
+  defp format_remaining_quota(bucket) when is_map(bucket) do
+    remaining = rate_limit_value(bucket, [:remaining])
+    limit = rate_limit_value(bucket, [:limit])
 
-  defp secondary_limit_used(rate_limits),
-    do: rate_limit_value(secondary_limit_bucket(rate_limits), [:used_percent, :usedPercent])
+    cond do
+      is_integer(remaining) and is_integer(limit) and limit > 0 ->
+        "#{format_int(remaining)} / #{format_int(limit)}"
+
+      is_integer(remaining) ->
+        format_int(remaining)
+
+      true ->
+        bucket
+        |> remaining_percent()
+        |> format_percent()
+    end
+  end
+
+  defp format_remaining_quota(_bucket), do: "未返回"
+
+  defp remaining_percent(bucket) when is_map(bucket) do
+    remaining = rate_limit_value(bucket, [:remaining])
+    limit = rate_limit_value(bucket, [:limit])
+    used_percent = rate_limit_value(bucket, [:used_percent, :usedPercent])
+
+    cond do
+      is_integer(remaining) and is_integer(limit) and limit > 0 ->
+        remaining * 100 / limit
+
+      is_integer(used_percent) ->
+        max(0, 100 - used_percent)
+
+      is_float(used_percent) ->
+        max(0.0, 100.0 - used_percent)
+
+      true ->
+        nil
+    end
+  end
 
   defp format_percent(value) when is_integer(value), do: "#{value}%"
 
@@ -1524,27 +1540,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp humanize_window_minutes(_minutes), do: "窗口未返回"
-
-  defp format_credits(nil), do: "未返回"
-  defp format_credits("unlimited"), do: "无限"
-
-  defp format_credits(%{} = credits) do
-    unlimited = rate_limit_value(credits, [:unlimited]) == true
-    has_credits = rate_limit_value(credits, [:has_credits, :hasCredits]) == true
-    balance = rate_limit_value(credits, [:balance])
-
-    cond do
-      unlimited -> "无限"
-      has_credits and is_number(balance) -> format_credits(balance)
-      has_credits -> "可用"
-      true -> "无"
-    end
-  end
-
-  defp format_credits(value) when is_integer(value), do: format_int(value)
-  defp format_credits(value) when is_float(value), do: :erlang.float_to_binary(value, decimals: 2)
-  defp format_credits(value) when is_binary(value), do: value
-  defp format_credits(value), do: to_string(value)
 
   defp rate_limit_value(nil, _key), do: nil
 
