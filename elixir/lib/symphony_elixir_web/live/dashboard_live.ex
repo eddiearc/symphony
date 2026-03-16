@@ -51,6 +51,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
       |> assign(:new_pipeline_form_open, false)
       |> assign(:new_pipeline_form, new_pipeline_form_defaults())
       |> assign(:new_pipeline_feedback, nil)
+      |> assign(:save_workflow_modal_open, false)
       |> assign(:workflow_feedback, nil)
       |> assign_workflow_editor()
 
@@ -213,32 +214,25 @@ defmodule SymphonyElixirWeb.DashboardLive do
     {:noreply, assign(socket, :config_view, normalize_config_view(view))}
   end
 
+  def handle_event("open_save_workflow_modal", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:save_workflow_modal_open, true)
+     |> assign(:workflow_feedback, nil)}
+  end
+
+  def handle_event("cancel_save_workflow_modal", _params, socket) do
+    {:noreply, assign(socket, :save_workflow_modal_open, false)}
+  end
+
+  def handle_event("confirm_save_workflow", _params, socket) do
+    effective_body = resolve_workflow_save_body(socket, socket.assigns.workflow_body)
+    persist_workflow(socket, effective_body)
+  end
+
   def handle_event("save_workflow", %{"workflow" => %{"body" => body}}, socket) do
     effective_body = resolve_workflow_save_body(socket, body)
-
-    case save_workflow_body(socket.assigns.workflow_target, effective_body) do
-      :ok ->
-        feedback = %{kind: :ok, message: save_feedback_message(socket.assigns.workflow_target)}
-
-        {:noreply,
-         socket
-         |> assign(:payload, load_payload())
-         |> assign_workflow_editor(feedback: feedback)
-         |> assign(:panel, "config")}
-
-      {:error, reason} ->
-        feedback = %{
-          kind: :error,
-          message: format_workflow_reason(reason, socket.assigns.workflow_target)
-        }
-
-        {:noreply,
-         socket
-         |> assign(:workflow_body, effective_body)
-         |> assign(:workflow_dirty, true)
-         |> assign(:workflow_feedback, feedback)
-         |> assign(:panel, "config")}
-    end
+    persist_workflow(socket, effective_body)
   end
 
   @impl true
@@ -509,10 +503,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
                     <form
                       id="workflow-save-form"
                       class="workflow-save-form"
-                      phx-submit="save_workflow"
                       phx-hook="WorkflowEditor"
                       data-save-shortcut="meta+s,ctrl+s"
-                      data-confirm-message={workflow_confirm_message(@workflow_change_manifest, @workflow_dirty, @workflow_target)}
                     >
                       <input type="hidden" name="workflow[body]" value={@workflow_body} />
 
@@ -520,7 +512,11 @@ defmodule SymphonyElixirWeb.DashboardLive do
                         <button type="button" class="secondary" phx-click="reload_workflow">
                           从磁盘重载
                         </button>
-                        <button type="submit" phx-disable-with="保存中…">
+                        <button
+                          id="open-save-workflow-modal"
+                          type="button"
+                          phx-click="open_save_workflow_modal"
+                        >
                           <%= save_button_label(@workflow_target) %>
                         </button>
                       </div>
@@ -848,6 +844,88 @@ defmodule SymphonyElixirWeb.DashboardLive do
                 </section>
 
               </div>
+
+              <section
+                :if={@save_workflow_modal_open}
+                class="modal-shell"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="save-workflow-modal-title"
+                phx-window-keydown="cancel_save_workflow_modal"
+                phx-key="escape"
+              >
+                <button
+                  type="button"
+                  class="modal-backdrop"
+                  aria-label="Close"
+                  phx-click="cancel_save_workflow_modal"
+                >
+                </button>
+
+                <div class="modal-card save-modal-card">
+                  <div class="modal-header">
+                    <div class="modal-title-stack">
+                      <p class="modal-kicker">Save</p>
+                      <h3 id="save-workflow-modal-title" class="section-title">Review Changes</h3>
+                      <p class="modal-copy"><%= save_modal_copy(@workflow_target, @workflow_dirty) %></p>
+                    </div>
+
+                    <button
+                      type="button"
+                      class="modal-close"
+                      aria-label="Close"
+                      phx-click="cancel_save_workflow_modal"
+                    >
+                      Close
+                    </button>
+                  </div>
+
+                  <div class="save-modal-grid">
+                    <article class="save-modal-card-block">
+                      <p class="save-modal-label">Target</p>
+                      <p class="save-modal-value"><%= save_modal_target_label(@workflow_target) %></p>
+                      <p class="save-modal-note">保存后会写回磁盘，并触发当前 pipeline 的热重载。</p>
+                    </article>
+
+                    <article class="save-modal-card-block save-modal-card-block-manifest">
+                      <p class="save-modal-label">Changes</p>
+
+                      <%= if @workflow_change_manifest == [] do %>
+                        <p class="save-modal-empty"><%= save_modal_empty_state(@workflow_dirty) %></p>
+                      <% else %>
+                        <div class="save-modal-change-list">
+                          <div
+                            :for={item <- Enum.take(@workflow_change_manifest, 8)}
+                            class="save-modal-change-item"
+                          >
+                            <span class="save-modal-change-label"><%= item.label %></span>
+                            <span class="save-modal-change-arrow">
+                              <%= item.before %> -> <%= item.after %>
+                            </span>
+                          </div>
+                        </div>
+                      <% end %>
+                    </article>
+                  </div>
+
+                  <div class="modal-actions">
+                    <button
+                      type="button"
+                      class="secondary"
+                      phx-click="cancel_save_workflow_modal"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="confirm_save_workflow"
+                      phx-disable-with="Saving…"
+                    >
+                      Save & Reload
+                    </button>
+                  </div>
+                </div>
+              </section>
 
               <section
                 :if={@new_pipeline_form_open}
@@ -2298,60 +2376,54 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp normalize_manifest_value(value) when is_binary(value), do: value
   defp normalize_manifest_value(value), do: to_string(value)
 
-  defp workflow_confirm_message(change_manifest, workflow_dirty, workflow_target)
-       when is_list(change_manifest) do
-    header =
-      case workflow_target do
-        %{mode: :pipeline, pipeline: %Pipeline{id: pipeline_id}} ->
-          "即将保存 pipeline `#{pipeline_id}`。"
+  defp save_modal_copy(%{mode: :pipeline, pipeline: %Pipeline{id: pipeline_id}}, true),
+    do: "Review the current draft for #{pipeline_id} before saving."
 
-        _ ->
-          "即将保存当前 pipeline 配置。"
-      end
+  defp save_modal_copy(%{mode: :pipeline, pipeline: %Pipeline{id: pipeline_id}}, false),
+    do: "No draft delta was detected for #{pipeline_id}, but you can still save the current body."
 
-    scope =
-      case change_manifest do
-        [] ->
-          if workflow_dirty do
-            "本次未识别到结构化字段差异，但会写回当前编辑器草稿。"
-          else
-            "当前草稿和已装载配置一致。"
-          end
+  defp save_modal_copy(_target, true), do: "Review the current draft before saving."
 
-        items ->
-          items
-          |> Enum.take(8)
-          |> Enum.map_join("\n", fn item ->
-            "- " <> workflow_change_item_summary(item)
-          end)
-          |> confirm_scope_from_lines(items)
-      end
+  defp save_modal_copy(_target, false),
+    do: "No draft delta was detected, but you can still save the current body."
 
-    [header, scope, "确认保存并触发热重载？"]
-    |> Enum.join("\n\n")
-  end
+  defp save_modal_target_label(%{mode: :pipeline, pipeline: %Pipeline{id: pipeline_id}}),
+    do: "pipeline / #{pipeline_id}"
 
-  defp workflow_change_item_summary(%{label: label, before: before_value, after: after_value}) do
-    cond do
-      label == "任务模版" ->
-        "任务模版内容已修改"
+  defp save_modal_target_label(_target), do: "current pipeline"
 
-      before_value == "未设置" ->
-        "#{label}: 新增为 #{truncate_confirm_value(after_value)}"
+  defp save_modal_empty_state(true),
+    do: "No structured delta was detected. The current editor body will still be written back."
 
-      after_value == "未设置" ->
-        "#{label}: 已清空（原值 #{truncate_confirm_value(before_value)}）"
+  defp save_modal_empty_state(false), do: "The current draft already matches the loaded pipeline config."
 
-      true ->
-        "#{label}: #{truncate_confirm_value(before_value)} -> #{truncate_confirm_value(after_value)}"
+  defp persist_workflow(socket, effective_body) do
+    case save_workflow_body(socket.assigns.workflow_target, effective_body) do
+      :ok ->
+        feedback = %{kind: :ok, message: save_feedback_message(socket.assigns.workflow_target)}
+
+        {:noreply,
+         socket
+         |> assign(:payload, load_payload())
+         |> assign(:save_workflow_modal_open, false)
+         |> assign_workflow_editor(feedback: feedback)
+         |> assign(:panel, "config")}
+
+      {:error, reason} ->
+        feedback = %{
+          kind: :error,
+          message: format_workflow_reason(reason, socket.assigns.workflow_target)
+        }
+
+        {:noreply,
+         socket
+         |> assign(:save_workflow_modal_open, false)
+         |> assign(:workflow_body, effective_body)
+         |> assign(:workflow_dirty, true)
+         |> assign(:workflow_feedback, feedback)
+         |> assign(:panel, "config")}
     end
   end
-
-  defp truncate_confirm_value(value) when is_binary(value) do
-    if String.length(value) > 48, do: String.slice(value, 0, 45) <> "...", else: value
-  end
-
-  defp truncate_confirm_value(value), do: value |> to_string() |> truncate_confirm_value()
 
   defp normalize_display_value(value, _labels) when value in ["", "nil"], do: "未返回"
   defp normalize_display_value(value, labels), do: Map.get(labels, value, value)
@@ -2417,12 +2489,6 @@ defmodule SymphonyElixirWeb.DashboardLive do
       "hooks_before_remove" => get_in(config, ["hooks", "before_remove"]) || "",
       "hooks_timeout_ms" => integer_string(get_in(config, ["hooks", "timeout_ms"]))
     }
-  end
-
-  defp confirm_scope_from_lines(lines, items) do
-    hidden_count = max(length(items) - 8, 0)
-    hidden_suffix = if hidden_count == 0, do: "", else: "\n- 以及另外 #{hidden_count} 项改动"
-    "修改范围：\n" <> lines <> hidden_suffix
   end
 
   defp structured_option_class(current, value) do
