@@ -1,9 +1,14 @@
 .PHONY: help all setup deps build run fmt fmt-check lint test coverage ci dialyzer e2e
 
 MIX ?= mix
-PIPELINE_ROOT ?= ./pipelines
+PIPELINE_ROOT ?=
 PORT ?= 4000
 SYMPHONY_ACK_FLAG ?= --i-understand-that-this-will-be-running-without-the-usual-guardrails
+RUN_ARGS = $(SYMPHONY_ACK_FLAG) --port $(PORT)
+
+ifneq ($(strip $(PIPELINE_ROOT)),)
+RUN_ARGS += $(PIPELINE_ROOT)
+endif
 
 help:
 	@echo "Targets: setup, deps, build, run, fmt, fmt-check, lint, test, coverage, dialyzer, e2e, ci"
@@ -18,7 +23,7 @@ build:
 	$(MIX) build
 
 run: build
-	./bin/symphony $(SYMPHONY_ACK_FLAG) --port $(PORT) $(PIPELINE_ROOT)
+	./bin/symphony $(RUN_ARGS)
 
 fmt:
 	$(MIX) format

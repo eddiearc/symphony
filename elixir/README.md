@@ -66,12 +66,22 @@ mise exec -- make run
 
 `make run` rebuilds `bin/symphony` before launch and starts the dashboard on
 `http://127.0.0.1:4000/` by default so the running service matches the current source tree.
-By default it starts from `./pipelines`. Override the pipeline root or dashboard port as needed:
+By default it starts from `~/.symphony/pipelines`. Override the pipeline root or dashboard port
+as needed:
 
 ```bash
 mise exec -- make run
+mise exec -- make run PIPELINE_ROOT=./pipelines
 mise exec -- make run PIPELINE_ROOT=/path/to/pipelines
 mise exec -- make run PORT=4100 PIPELINE_ROOT=/path/to/pipelines
+```
+
+To seed the default home-directory pipeline root with the checked-in default pipeline:
+
+```bash
+mkdir -p ~/.symphony/pipelines/default
+cp pipelines/default/pipeline.yaml ~/.symphony/pipelines/default/
+cp pipelines/default/WORKFLOW.md ~/.symphony/pipelines/default/
 ```
 
 ## Configuration
@@ -82,7 +92,8 @@ Pass a pipeline root directory to `./bin/symphony`:
 ./bin/symphony /path/to/pipelines
 ```
 
-If no path is passed, Symphony starts from `./pipelines`.
+If no path is passed, Symphony starts from `~/.symphony/pipelines`.
+Use `./pipelines` explicitly when you want to run the checked-in repo pipeline definitions.
 
 Optional flags:
 

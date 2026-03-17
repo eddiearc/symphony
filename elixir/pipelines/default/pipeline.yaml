@@ -16,7 +16,7 @@ agent:
   max_turns: 20
 codex:
   approval_policy: "never"
-  command: "env HTTP_PROXY=http://127.0.0.1:7890 HTTPS_PROXY=http://127.0.0.1:7890 ALL_PROXY=socks5://127.0.0.1:7890 NO_PROXY=127.0.0.1,localhost,.local /Users/arc/.nvm/versions/node/v24.0.2/bin/codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --model gpt-5.4 app-server"
+  command: "codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --model gpt-5.4 app-server"
   read_timeout_ms: 5000
   stall_timeout_ms: 300000
   thread_sandbox: "danger-full-access"

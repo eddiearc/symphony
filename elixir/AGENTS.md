@@ -7,8 +7,11 @@ This directory contains the Elixir agent orchestration service that polls Linear
 - Elixir: `1.19.x` (OTP 28) via `mise`.
 - Install deps: `mix setup`.
 - When asked to start the service, default to a browser-accessible launch.
-  Prefer `make run`, which rebuilds `bin/symphony`, starts from `./pipelines`, and serves the
-  dashboard at `http://127.0.0.1:4000/` unless the user requests a different port.
+  Prefer `make run`, which rebuilds `bin/symphony`, uses Symphony's default pipeline root
+  (`~/.symphony/pipelines`), and serves the dashboard at `http://127.0.0.1:4000/` unless the
+  user requests a different port.
+  If the user specifically wants the checked-in repo pipelines, override with
+  `make run PIPELINE_ROOT=./pipelines`.
 - Main quality gate: `make all` (format check, lint, coverage, dialyzer).
 
 
