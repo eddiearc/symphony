@@ -353,6 +353,37 @@ defmodule SymphonyElixir.CoreTest do
     assert Workflow.workflow_file_path() == "/tmp/app/pipelines/default/WORKFLOW.md"
   end
 
+  test "pipeline root path defaults to ~/.symphony/pipelines and creates it when unset" do
+    original_pipeline_root_path = Application.get_env(:symphony_elixir, :pipeline_root_path)
+    original_home = System.get_env("HOME")
+
+    home_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-home-#{System.unique_integer([:positive])}"
+      )
+
+    expected_root = Path.join([home_root, ".symphony", "pipelines"])
+
+    on_exit(fn ->
+      restore_env("HOME", original_home)
+
+      if is_binary(original_pipeline_root_path) do
+        Workflow.set_pipeline_root_path(original_pipeline_root_path)
+      else
+        Workflow.clear_pipeline_root_path()
+      end
+
+      File.rm_rf(home_root)
+    end)
+
+    Workflow.clear_pipeline_root_path()
+    System.put_env("HOME", home_root)
+
+    assert Workflow.pipeline_root_path() == expected_root
+    assert File.dir?(expected_root)
+  end
+
   test "workflow file path resolves from app env when set" do
     app_workflow_path = "/tmp/app/WORKFLOW.md"
 
@@ -481,6 +512,7 @@ defmodule SymphonyElixir.CoreTest do
         case Supervisor.restart_child(SymphonyElixir.Supervisor, SymphonyElixir.Orchestrator) do
           {:ok, _pid} -> :ok
           {:error, {:already_started, _pid}} -> :ok
+          {:error, :running} -> :ok
         end
       end
     end)

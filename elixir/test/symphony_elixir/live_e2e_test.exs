@@ -669,6 +669,7 @@ defmodule SymphonyElixir.LiveE2ETest do
       case Supervisor.restart_child(SymphonyElixir.Supervisor, SymphonyElixir.Orchestrator) do
         {:ok, _pid} -> :ok
         {:error, {:already_started, _pid}} -> :ok
+        {:error, :running} -> :ok
       end
     end
   end

@@ -1175,6 +1175,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert opened_html =~ "Create Pipeline"
     assert opened_html =~ "先创建最小可运行配置，后续再补高级项。"
+    assert opened_html =~ "你正在处理 Linear 工单"
 
     created_html =
       view

@@ -25,7 +25,13 @@ defmodule SymphonyElixir.Workflow do
   @spec pipeline_root_path() :: Path.t()
   def pipeline_root_path do
     Application.get_env(:symphony_elixir, :pipeline_root_path) ||
-      Path.join(File.cwd!(), @pipelines_dir_name)
+      ensure_directory(default_pipeline_root_path())
+  end
+
+  @spec default_pipeline_root_path() :: Path.t()
+  def default_pipeline_root_path do
+    home = System.get_env("HOME") || System.user_home!()
+    Path.join([home, ".symphony", @pipelines_dir_name]) |> Path.expand()
   end
 
   @spec set_workflow_file_path(Path.t()) :: :ok
@@ -202,6 +208,13 @@ defmodule SymphonyElixir.Workflow do
     repo_root = Path.expand("../../..", __DIR__)
     pipeline_dir = Path.join(repo_root, "elixir/pipelines/default")
     {Path.join(pipeline_dir, "pipeline.yaml"), Path.join(pipeline_dir, @workflow_file_name)}
+  end
+
+  defp ensure_directory(path) when is_binary(path) do
+    case File.mkdir_p(path) do
+      :ok -> path
+      {:error, _reason} -> path
+    end
   end
 
   defp read_pipeline_config(path) when is_binary(path) do

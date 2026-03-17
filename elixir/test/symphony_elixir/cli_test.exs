@@ -40,10 +40,19 @@ defmodule SymphonyElixir.CLITest do
   end
 
   test "defaults to pipelines directory when path is missing" do
+    parent = self()
+    default_pipelines_root = Path.expand("~/.symphony/pipelines")
+
     deps = %{
-      dir_exists?: fn path -> Path.basename(path) == "pipelines" end,
-      set_pipeline_root_path: fn _path -> :ok end,
-      load_pipelines: fn _path -> {:ok, [%Pipeline{id: "default", enabled: true}]} end,
+      dir_exists?: fn _path -> flunk("default pipeline root should not require a preflight dir check") end,
+      set_pipeline_root_path: fn path ->
+        send(parent, {:pipeline_root_set, path})
+        :ok
+      end,
+      load_pipelines: fn path ->
+        send(parent, {:pipelines_loaded, path})
+        {:ok, [%Pipeline{id: "default", enabled: true}]}
+      end,
       validate_pipeline: fn _pipeline -> :ok end,
       set_logs_root: fn _path -> :ok end,
       set_server_port_override: fn _port -> :ok end,
@@ -51,6 +60,8 @@ defmodule SymphonyElixir.CLITest do
     }
 
     assert :ok = CLI.evaluate([@ack_flag], deps)
+    assert_received {:pipelines_loaded, ^default_pipelines_root}
+    assert_received {:pipeline_root_set, ^default_pipelines_root}
   end
 
   test "uses an explicit pipeline root override when provided" do
@@ -148,7 +159,7 @@ defmodule SymphonyElixir.CLITest do
 
   test "defaults to pipelines directory when path is missing and pipelines exists" do
     parent = self()
-    pipelines_root = Path.expand("pipelines")
+    pipelines_root = Path.expand("~/.symphony/pipelines")
 
     enabled_pipeline = %Pipeline{
       id: "workcow",
@@ -163,10 +174,7 @@ defmodule SymphonyElixir.CLITest do
     }
 
     deps = %{
-      dir_exists?: fn path ->
-        send(parent, {:dir_checked, path})
-        path == pipelines_root
-      end,
+      dir_exists?: fn _path -> flunk("default pipeline root should not require a preflight dir check") end,
       set_pipeline_root_path: fn path ->
         send(parent, {:pipeline_root_set, path})
         :ok
@@ -185,7 +193,6 @@ defmodule SymphonyElixir.CLITest do
     }
 
     assert :ok = CLI.evaluate([@ack_flag], deps)
-    assert_received {:dir_checked, ^pipelines_root}
     assert_received {:pipelines_loaded, ^pipelines_root}
     assert_received {:pipeline_root_set, ^pipelines_root}
     assert_received {:pipeline_validated, "workcow"}
@@ -226,7 +233,7 @@ defmodule SymphonyElixir.CLITest do
   end
 
   test "returns startup error when one enabled pipeline is invalid" do
-    pipelines_root = Path.expand("pipelines")
+    pipelines_root = Path.expand("~/.symphony/pipelines")
 
     invalid_pipeline = %Pipeline{
       id: "project-a",
@@ -252,7 +259,7 @@ defmodule SymphonyElixir.CLITest do
   end
 
   test "starts even when pipeline root has no enabled pipelines" do
-    pipelines_root = Path.expand("pipelines")
+    pipelines_root = Path.expand("~/.symphony/pipelines")
     parent = self()
 
     deps = %{
@@ -287,7 +294,7 @@ defmodule SymphonyElixir.CLITest do
   end
 
   test "starts from a pipeline root with multiple enabled pipelines" do
-    pipelines_root = Path.expand("pipelines")
+    pipelines_root = Path.expand("~/.symphony/pipelines")
 
     deps = %{
       dir_exists?: fn path -> path == pipelines_root end,
