@@ -16,7 +16,7 @@ agent:
   max_turns: 20
 codex:
   approval_policy: "never"
-  command: "codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --model gpt-5.4 app-server"
+  command: "env HTTP_PROXY=http://127.0.0.1:7890 HTTPS_PROXY=http://127.0.0.1:7890 ALL_PROXY=socks5://127.0.0.1:7890 NO_PROXY=127.0.0.1,localhost,.local /Users/arc/.nvm/versions/node/v24.0.2/bin/codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --model gpt-5.4 app-server"
   read_timeout_ms: 5000
   stall_timeout_ms: 300000
   thread_sandbox: "danger-full-access"
@@ -26,13 +26,20 @@ codex:
 hooks:
   after_create: |
     git clone --depth 1 https://github.com/eddiearc/symphony .
-    if ! command -v mise >/dev/null 2>&1; then
-      echo "mise not found in PATH" >&2
+    cd elixir
+    if command -v mise >/dev/null 2>&1; then
+      mise trust || true
+      if mise exec -- mix deps.get; then
+        exit 0
+      fi
+      echo "mise exec failed; falling back to system mix" >&2
+    fi
+    if command -v mix >/dev/null 2>&1; then
+      HEX_UNSAFE_HTTPS=1 mix deps.get
+    else
+      echo "mix not found in PATH" >&2
       exit 1
     fi
-    cd elixir
-    mise trust
-    mise exec -- mix deps.get
   timeout_ms: 60000
 server:
   host: "127.0.0.1"

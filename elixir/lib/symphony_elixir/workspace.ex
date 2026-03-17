@@ -45,7 +45,7 @@ defmodule SymphonyElixir.Workspace do
 
       with {:ok, workspace} <- workspace_path_for_issue(workspace_root, safe_id, worker_host),
            :ok <- validate_workspace_path(workspace, workspace_root, worker_host),
-           {:ok, workspace, created?} <- ensure_workspace(workspace, worker_host, hooks.timeout_ms),
+           {:ok, workspace, created?} <- ensure_workspace(workspace, worker_host, hooks),
            :ok <- maybe_run_after_create_hook(workspace, issue_context, created?, hooks, worker_host) do
         {:ok, workspace}
       end
@@ -57,8 +57,11 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  defp ensure_workspace(workspace, nil, _timeout_ms) do
+  defp ensure_workspace(workspace, nil, hooks) do
     cond do
+      File.dir?(workspace) and stale_bootstrap_workspace?(workspace, hooks) ->
+        create_workspace(workspace)
+
       File.dir?(workspace) ->
         clean_tmp_artifacts(workspace)
         {:ok, workspace, false}
@@ -72,13 +75,19 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  defp ensure_workspace(workspace, worker_host, timeout_ms) when is_binary(worker_host) do
+  defp ensure_workspace(workspace, worker_host, hooks) when is_binary(worker_host) do
     script =
       [
         "set -eu",
         remote_shell_assign("workspace", workspace),
         "if [ -d \"$workspace\" ]; then",
-        "  created=0",
+        "  if #{remote_stale_workspace_check(hooks)}; then",
+        "    rm -rf \"$workspace\"",
+        "    mkdir -p \"$workspace\"",
+        "    created=1",
+        "  else",
+        "    created=0",
+        "  fi",
         "elif [ -e \"$workspace\" ]; then",
         "  rm -rf \"$workspace\"",
         "  mkdir -p \"$workspace\"",
@@ -92,7 +101,7 @@ defmodule SymphonyElixir.Workspace do
       ]
       |> Enum.join("\n")
 
-    case run_remote_command(worker_host, script, timeout_ms, "workspace_prepare") do
+    case run_remote_command(worker_host, script, hooks.timeout_ms, "workspace_prepare") do
       {:ok, {output, 0}} ->
         parse_remote_workspace_output(output)
 
@@ -311,6 +320,23 @@ defmodule SymphonyElixir.Workspace do
     end)
   end
 
+  defp stale_bootstrap_workspace?(workspace, hooks) do
+    clean_tmp_artifacts(workspace)
+
+    case hooks.after_create do
+      nil ->
+        false
+
+      _command ->
+        workspace
+        |> File.ls!()
+        |> Enum.reject(&MapSet.member?(@excluded_entries, &1))
+        |> Enum.empty?()
+    end
+  rescue
+    _error -> true
+  end
+
   defp maybe_run_after_create_hook(workspace, issue_context, created?, hooks, worker_host) do
     case created? do
       true ->
@@ -319,11 +345,22 @@ defmodule SymphonyElixir.Workspace do
             :ok
 
           command ->
-            run_hook(command, workspace, issue_context, "after_create", hooks.timeout_ms, worker_host)
+            run_after_create_hook(command, workspace, issue_context, hooks.timeout_ms, worker_host)
         end
 
       false ->
         :ok
+    end
+  end
+
+  defp run_after_create_hook(command, workspace, issue_context, timeout_ms, worker_host) do
+    case run_hook(command, workspace, issue_context, "after_create", timeout_ms, worker_host) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        cleanup_failed_workspace(workspace, worker_host)
+        {:error, reason}
     end
   end
 
@@ -444,6 +481,37 @@ defmodule SymphonyElixir.Workspace do
     {:error, {:workspace_hook_failed, hook_name, status, output}}
   end
 
+  defp cleanup_failed_workspace(workspace, nil) do
+    File.rm_rf(workspace)
+    :ok
+  rescue
+    error ->
+      Logger.warning("Failed cleaning workspace after bootstrap error workspace=#{workspace} worker_host=local error=#{Exception.message(error)}")
+      :ok
+  end
+
+  defp cleanup_failed_workspace(workspace, worker_host) when is_binary(worker_host) do
+    case run_remote_command(
+           worker_host,
+           remote_shell_assign("workspace", workspace) <> "\nrm -rf \"$workspace\"",
+           30_000,
+           "workspace_cleanup"
+         ) do
+      {:ok, {_output, 0}} ->
+        :ok
+
+      {:ok, {output, status}} ->
+        Logger.warning("Failed cleaning workspace after bootstrap error workspace=#{workspace} worker_host=#{worker_host} status=#{status} output=#{inspect(sanitize_hook_output_for_log(output))}")
+
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed cleaning workspace after bootstrap error workspace=#{workspace} worker_host=#{worker_host} reason=#{inspect(reason)}")
+
+        :ok
+    end
+  end
+
   defp sanitize_hook_output_for_log(output, max_bytes \\ 2_048) do
     binary_output = IO.iodata_to_binary(output)
 
@@ -454,6 +522,12 @@ defmodule SymphonyElixir.Workspace do
       false ->
         binary_part(binary_output, 0, max_bytes) <> "... (truncated)"
     end
+  end
+
+  defp remote_stale_workspace_check(%{after_create: nil}), do: "false"
+
+  defp remote_stale_workspace_check(_hooks) do
+    "[ -z \"$(find \\\"$workspace\\\" -mindepth 1 -maxdepth 1 ! -name .elixir_ls -print -quit 2>/dev/null)\" ]"
   end
 
   defp validate_workspace_path(workspace, workspace_root, nil)

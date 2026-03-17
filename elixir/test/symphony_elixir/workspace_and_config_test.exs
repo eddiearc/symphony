@@ -258,6 +258,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       assert {:error, {:workspace_hook_failed, "after_create", 17, _output}} =
                Workspace.create_for_issue("MT-FAIL")
+
+      refute File.exists?(Path.join(workspace_root, "MT-FAIL"))
     after
       File.rm_rf(workspace_root)
     end
@@ -279,6 +281,33 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       assert {:error, {:workspace_hook_timeout, "after_create", 10}} =
                Workspace.create_for_issue("MT-TIMEOUT")
+
+      refute File.exists?(Path.join(workspace_root, "MT-TIMEOUT"))
+    after
+      File.rm_rf(workspace_root)
+    end
+  end
+
+  test "workspace recreates empty stale directories when after_create is configured" do
+    workspace_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-workspace-stale-empty-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        hook_after_create: "echo bootstrapped > README.md"
+      )
+
+      stale_workspace = Path.join(workspace_root, "MT-STALE-EMPTY")
+      File.mkdir_p!(stale_workspace)
+      assert {:ok, canonical_workspace} = SymphonyElixir.PathSafety.canonicalize(stale_workspace)
+
+      assert {:ok, workspace} = Workspace.create_for_issue("MT-STALE-EMPTY")
+      assert workspace == canonical_workspace
+      assert File.read!(Path.join(workspace, "README.md")) == "bootstrapped\n"
     after
       File.rm_rf(workspace_root)
     end
