@@ -300,8 +300,8 @@ defmodule SymphonyElixir.CoreTest do
     assert Map.get(hooks, "after_create") =~ "mise exec -- mix deps.get"
 
     assert String.trim(prompt) != ""
-    assert prompt =~ "你正在处理 Linear 工单 `{{ issue.identifier }}`"
-    assert prompt =~ "这是一次无人值守的编排会话"
+    assert prompt =~ "You are working on a Linear ticket `{{ issue.identifier }}`"
+    assert prompt =~ "This is an unattended orchestration session."
   end
 
   test "linear api token resolves from LINEAR_API_KEY env var" do
@@ -1411,17 +1411,17 @@ defmodule SymphonyElixir.CoreTest do
 
     prompt = PromptBuilder.build_prompt(pipeline, issue, attempt: 2)
 
-    assert prompt =~ "你正在处理 Linear 工单 `MT-616`"
-    assert prompt =~ "工单上下文："
-    assert prompt =~ "标识：MT-616"
-    assert prompt =~ "标题：Use rich templates for WORKFLOW.md"
-    assert prompt =~ "当前状态：In Progress"
+    assert prompt =~ "You are working on a Linear ticket `MT-616`"
+    assert prompt =~ "Issue context:"
+    assert prompt =~ "Identifier: MT-616"
+    assert prompt =~ "Title: Use rich templates for WORKFLOW.md"
+    assert prompt =~ "Current status: In Progress"
     assert prompt =~ "https://example.org/issues/MT-616/use-rich-templates-for-workflowmd"
-    assert prompt =~ "这是一次无人值守的编排会话"
-    assert prompt =~ "只有在出现真正阻塞时才可以提前停止"
-    assert prompt =~ "不要包含“给用户的下一步”"
-    assert prompt =~ "这是第 #2 次重试"
-    assert prompt =~ "## 前提条件：可使用 Linear MCP 或 `linear_graphql` 工具"
+    assert prompt =~ "This is an unattended orchestration session."
+    assert prompt =~ "Only stop early for a true blocker"
+    assert prompt =~ "Do not include \"next steps for user\""
+    assert prompt =~ "This is retry attempt #2"
+    assert prompt =~ "## Prerequisite: Linear MCP or `linear_graphql` tool is available"
   end
 
   test "prompt builder adds continuation guidance for retries" do
