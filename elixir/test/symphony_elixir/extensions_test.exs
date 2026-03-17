@@ -1212,6 +1212,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert alpha_config["id"] == "alpha"
     assert get_in(alpha_config, ["tracker", "project_slug"]) == "alpha-project"
   end
+
   test "config panel exposes save modal affordances and keyboard shortcut hook" do
     orchestrator_name = Module.concat(__MODULE__, :WorkflowEditorHooksOrchestrator)
     snapshot = static_snapshot()
