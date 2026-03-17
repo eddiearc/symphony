@@ -1,4 +1,4 @@
-.PHONY: help all setup deps build run fmt fmt-check lint test coverage ci dialyzer e2e
+.PHONY: help all setup deps build run fmt fmt-check lint test coverage ci dialyzer e2e e2e-dashboard e2e-dashboard-setup
 
 MIX ?= mix
 PIPELINE_ROOT ?=
@@ -11,7 +11,7 @@ RUN_ARGS += $(PIPELINE_ROOT)
 endif
 
 help:
-	@echo "Targets: setup, deps, build, run, fmt, fmt-check, lint, test, coverage, dialyzer, e2e, ci"
+	@echo "Targets: setup, deps, build, run, fmt, fmt-check, lint, test, coverage, dialyzer, e2e, e2e-dashboard-setup, e2e-dashboard, ci"
 
 setup:
 	$(MIX) setup
@@ -46,6 +46,12 @@ dialyzer:
 
 e2e:
 	SYMPHONY_RUN_LIVE_E2E=1 $(MIX) test test/symphony_elixir/live_e2e_test.exs
+
+e2e-dashboard-setup:
+	cd test/e2e_playwright && npm install && npx playwright install chromium
+
+e2e-dashboard:
+	cd test/e2e_playwright && npm test
 
 ci:
 	$(MAKE) setup

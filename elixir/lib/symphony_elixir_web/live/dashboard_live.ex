@@ -700,35 +700,42 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
                               <div class="structured-field">
                                 <span class="structured-label">thread sandbox</span>
-                                <span class="structured-help">决定整条会话线程默认拥有哪些文件系统权限；权限越高，自主性越强，风险也越高。</span>
+                                <span class="structured-help">决定整条会话线程默认拥有哪些文件系统权限；结构化编辑器保存时会同步对应的 turn sandbox 预设，避免显示权限和实际执行权限不一致。</span>
+                                <% thread_sandbox_value = display_thread_sandbox(Map.get(@workflow_form, "codex_thread_sandbox")) %>
                                 <div class="structured-choice-row structured-choice-row-stack">
-                                  <button
-                                    type="button"
-                                    class={structured_option_class(Map.get(@workflow_form, "codex_thread_sandbox"), "read-only")}
-                                    phx-click="workflow_form_preset"
-                                    phx-value-field="codex_thread_sandbox"
-                                    phx-value-value="read-only"
-                                  >
-                                    Read Only
-                                  </button>
-                                  <button
-                                    type="button"
-                                    class={structured_option_class(Map.get(@workflow_form, "codex_thread_sandbox"), "workspace-write")}
-                                    phx-click="workflow_form_preset"
-                                    phx-value-field="codex_thread_sandbox"
-                                    phx-value-value="workspace-write"
-                                  >
-                                    Workspace Write
-                                  </button>
-                                  <button
-                                    type="button"
-                                    class={structured_option_class(Map.get(@workflow_form, "codex_thread_sandbox"), "danger-full-access")}
-                                    phx-click="workflow_form_preset"
-                                    phx-value-field="codex_thread_sandbox"
-                                    phx-value-value="danger-full-access"
-                                  >
-                                    Danger Full Access
-                                  </button>
+                                  <label class={structured_option_class(thread_sandbox_value, "read-only")} for="workflow-codex-thread-sandbox-read-only">
+                                    <input
+                                      id="workflow-codex-thread-sandbox-read-only"
+                                      class="structured-choice-input"
+                                      type="radio"
+                                      name="workflow_form[codex_thread_sandbox]"
+                                      value="read-only"
+                                      checked={thread_sandbox_value == "read-only"}
+                                    />
+                                    <span>Read Only</span>
+                                  </label>
+                                  <label class={structured_option_class(thread_sandbox_value, "workspace-write")} for="workflow-codex-thread-sandbox-workspace-write">
+                                    <input
+                                      id="workflow-codex-thread-sandbox-workspace-write"
+                                      class="structured-choice-input"
+                                      type="radio"
+                                      name="workflow_form[codex_thread_sandbox]"
+                                      value="workspace-write"
+                                      checked={thread_sandbox_value == "workspace-write"}
+                                    />
+                                    <span>Workspace Write</span>
+                                  </label>
+                                  <label class={structured_option_class(thread_sandbox_value, "danger-full-access")} for="workflow-codex-thread-sandbox-danger-full-access">
+                                    <input
+                                      id="workflow-codex-thread-sandbox-danger-full-access"
+                                      class="structured-choice-input"
+                                      type="radio"
+                                      name="workflow_form[codex_thread_sandbox]"
+                                      value="danger-full-access"
+                                      checked={thread_sandbox_value == "danger-full-access"}
+                                    />
+                                    <span>Danger Full Access</span>
+                                  </label>
                                 </div>
                               </div>
 
@@ -1990,6 +1997,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
         _ -> %{}
       end
 
+    thread_sandbox = blank_to_nil(workflow_form["codex_thread_sandbox"])
+    turn_sandbox_policy = synced_turn_sandbox_policy(base_config, thread_sandbox)
+
     config =
       base_config
       |> Map.put("enabled", truthy_param?(workflow_form["pipeline_enabled"]))
@@ -2023,10 +2033,8 @@ defmodule SymphonyElixirWeb.DashboardLive do
         integer_or_nil(workflow_form["agent_max_retry_backoff_ms"])
       )
       |> put_nested(["codex", "command"], blank_to_nil(workflow_form["codex_command"]))
-      |> put_nested(
-        ["codex", "thread_sandbox"],
-        blank_to_nil(workflow_form["codex_thread_sandbox"])
-      )
+      |> put_nested(["codex", "thread_sandbox"], thread_sandbox)
+      |> put_nested(["codex", "turn_sandbox_policy"], turn_sandbox_policy)
       |> put_nested(
         ["codex", "stall_timeout_ms"],
         integer_or_nil(workflow_form["codex_stall_timeout_ms"])
@@ -2042,6 +2050,31 @@ defmodule SymphonyElixirWeb.DashboardLive do
 
     Workflow.render_content(config, workflow_form["prompt_template"] || "")
   end
+
+  defp synced_turn_sandbox_policy(base_config, thread_sandbox) do
+    loaded_thread_sandbox = get_in(base_config, ["codex", "thread_sandbox"])
+    loaded_turn_sandbox_policy = get_in(base_config, ["codex", "turn_sandbox_policy"])
+
+    cond do
+      thread_sandbox in [nil, ""] ->
+        nil
+
+      thread_sandbox == loaded_thread_sandbox and is_map(loaded_turn_sandbox_policy) ->
+        loaded_turn_sandbox_policy
+
+      true ->
+        turn_sandbox_policy_preset(thread_sandbox)
+    end
+  end
+
+  defp turn_sandbox_policy_preset("read-only"), do: %{"type" => "readOnly"}
+  defp turn_sandbox_policy_preset("danger-full-access"), do: %{"type" => "dangerFullAccess"}
+
+  defp turn_sandbox_policy_preset("workspace-write"),
+    do: nil
+
+  defp turn_sandbox_policy_preset(_unknown),
+    do: nil
 
   defp put_nested(map, [key], value) when is_map(map) do
     put_or_delete(map, key, value)
@@ -2507,7 +2540,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp codex_workflow_form(config) do
     %{
       "codex_command" => get_in(config, ["codex", "command"]) || "",
-      "codex_thread_sandbox" => get_in(config, ["codex", "thread_sandbox"]) || "",
+      "codex_thread_sandbox" => display_thread_sandbox(get_in(config, ["codex", "thread_sandbox"])),
       "codex_stall_timeout_ms" => integer_string(get_in(config, ["codex", "stall_timeout_ms"]))
     }
   end
@@ -2526,6 +2559,9 @@ defmodule SymphonyElixirWeb.DashboardLive do
     base = "structured-choice"
     if current == value, do: "#{base} structured-choice-active", else: base
   end
+
+  defp display_thread_sandbox(value) when value in [nil, ""], do: "workspace-write"
+  defp display_thread_sandbox(value), do: value
 
   defp state_chip_values(csv), do: csv_to_list(csv) || []
 

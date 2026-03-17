@@ -1392,6 +1392,175 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert SymphonyElixir.Config.linear_project_slug() == "structured-save-project"
   end
 
+  test "config panel syncs turn sandbox policy when thread sandbox changes" do
+    orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowSandboxSyncOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    workflow_path = Workflow.workflow_file_path()
+    pipeline_config_path = Path.join(Path.dirname(workflow_path), "pipeline.yaml")
+
+    {:ok, view, _html} = live(build_conn(), "/panel/config")
+
+    view
+    |> element("#config-module-tab-codex")
+    |> render_click()
+
+    updated_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "codex_thread_sandbox" => "workspace-write"
+        }
+      )
+      |> render_change()
+
+    assert updated_html =~ "Workspace Write"
+
+    saved_html =
+      view
+      |> form("#workflow-editor-form", workflow: %{body: File.read!(workflow_path)})
+      |> render_submit()
+
+    assert saved_html =~ "已保存并重新加载当前 pipeline 配置。"
+
+    assert {:ok, saved_config} =
+             pipeline_config_path
+             |> File.read!()
+             |> YamlElixir.read_from_string()
+
+    assert get_in(saved_config, ["codex", "thread_sandbox"]) == "workspace-write"
+    refute Map.has_key?(get_in(saved_config, ["codex"]) || %{}, "turn_sandbox_policy")
+  end
+
+  test "config panel submits thread sandbox changes through structured form inputs" do
+    orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowSandboxFormOrchestrator)
+    snapshot = static_snapshot()
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    workflow_path = Workflow.workflow_file_path()
+    pipeline_config_path = Path.join(Path.dirname(workflow_path), "pipeline.yaml")
+
+    {:ok, view, _html} = live(build_conn(), "/panel/config")
+
+    codex_html =
+      view
+      |> element("#config-module-tab-codex")
+      |> render_click()
+
+    document = Floki.parse_document!(codex_html)
+
+    assert Floki.find(
+             document,
+             "input[type='radio'][name='workflow_form[codex_thread_sandbox]'][value='danger-full-access']"
+           ) != []
+
+    updated_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "codex_thread_sandbox" => "danger-full-access"
+        }
+      )
+      |> render_change()
+
+    assert updated_html =~ "Danger Full Access"
+
+    saved_html =
+      view
+      |> form("#workflow-editor-form", workflow: %{body: File.read!(workflow_path)})
+      |> render_submit()
+
+    assert saved_html =~ "已保存并重新加载当前 pipeline 配置。"
+
+    assert {:ok, saved_config} =
+             pipeline_config_path
+             |> File.read!()
+             |> YamlElixir.read_from_string()
+
+    assert get_in(saved_config, ["codex", "thread_sandbox"]) == "danger-full-access"
+    assert get_in(saved_config, ["codex", "turn_sandbox_policy"]) == %{"type" => "dangerFullAccess"}
+  end
+
+  test "config panel treats omitted thread sandbox as workspace write in the structured form" do
+    orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowSandboxDefaultOrchestrator)
+    snapshot = static_snapshot()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      codex_thread_sandbox: nil,
+      codex_turn_sandbox_policy: nil
+    )
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, view, _html} = live(build_conn(), "/panel/config")
+
+    codex_html =
+      view
+      |> element("#config-module-tab-codex")
+      |> render_click()
+
+    document = Floki.parse_document!(codex_html)
+
+    assert Floki.find(
+             document,
+             "input[type='radio'][name='workflow_form[codex_thread_sandbox]'][value='workspace-write'][checked]"
+           ) != []
+  end
+
+  test "config panel backfills danger turn sandbox policy when thread sandbox is danger full access" do
+    orchestrator_name = Module.concat(__MODULE__, :StructuredWorkflowDangerSandboxOrchestrator)
+    snapshot = static_snapshot()
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      codex_thread_sandbox: "danger-full-access",
+      codex_turn_sandbox_policy: nil
+    )
+
+    start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: %{}})
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    workflow_path = Workflow.workflow_file_path()
+    pipeline_config_path = Path.join(Path.dirname(workflow_path), "pipeline.yaml")
+
+    {:ok, view, _html} = live(build_conn(), "/panel/config")
+
+    updated_html =
+      view
+      |> form("#workflow-structured-form",
+        workflow_form: %{
+          "tracker_project_slug" => "danger-sandbox-project"
+        }
+      )
+      |> render_change()
+
+    assert updated_html =~ "danger-sandbox-project"
+
+    saved_html =
+      view
+      |> form("#workflow-editor-form", workflow: %{body: File.read!(workflow_path)})
+      |> render_submit()
+
+    assert saved_html =~ "已保存并重新加载当前 pipeline 配置。"
+
+    assert {:ok, saved_config} =
+             pipeline_config_path
+             |> File.read!()
+             |> YamlElixir.read_from_string()
+
+    assert get_in(saved_config, ["codex", "thread_sandbox"]) == "danger-full-access"
+    assert get_in(saved_config, ["codex", "turn_sandbox_policy"]) == %{"type" => "dangerFullAccess"}
+  end
+
   test "config panel can save through the review modal" do
     orchestrator_name = Module.concat(__MODULE__, :SaveWorkflowModalOrchestrator)
     snapshot = static_snapshot()

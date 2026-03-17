@@ -1,0 +1,16 @@
+{
+  "name": "symphony-dashboard-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Isolated Playwright browser tests for the Symphony dashboard",
+  "scripts": {
+    "build:symphony": "make -C ../.. build",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "install:browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0"
+  }
+}

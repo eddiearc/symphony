@@ -2,6 +2,9 @@
 
 This directory contains the Elixir agent orchestration service that polls Linear, creates per-issue workspaces, and runs Codex in app-server mode.
 
+This file defines rules specific to the `elixir/` reference implementation.
+For repository-wide guidance, also see [`../AGENTS.md`](../AGENTS.md).
+
 ## Environment
 
 - Elixir: `1.19.x` (OTP 28) via `mise`.
@@ -13,6 +16,9 @@ This directory contains the Elixir agent orchestration service that polls Linear
   If the user specifically wants the checked-in repo pipelines, override with
   `make run PIPELINE_ROOT=./pipelines`.
 - Main quality gate: `make all` (format check, lint, coverage, dialyzer).
+- Follow [`docs/dashboard_e2e_testing.md`](./docs/dashboard_e2e_testing.md) for browser-driven dashboard validation.
+  - For `/panel/config` E2E work, isolate runs with a temporary `PIPELINE_ROOT` and temporary `PORT`.
+  - Do not point browser tests at `~/.symphony/pipelines`.
 
 
 ## Codebase-Specific Conventions
@@ -33,6 +39,14 @@ This directory contains the Elixir agent orchestration service that polls Linear
 ## Tests and Validation
 
 Run targeted tests while iterating, then run full gates before handoff.
+
+For dashboard/browser regressions:
+
+- prefer LiveView integration tests for state/save semantics
+- use `agent-browser` first to explore and confirm the real browser path
+- convert stable paths into Playwright specs for permanent browser E2E coverage
+- do not rely on `agent-browser` as the lasting regression harness
+- follow the isolated launch pattern in [`docs/dashboard_e2e_testing.md`](./docs/dashboard_e2e_testing.md)
 
 ```bash
 make all

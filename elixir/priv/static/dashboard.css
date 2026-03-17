@@ -1415,6 +1415,9 @@ pre,
 }
 
 .structured-choice {
+  position: relative;
+  display: flex;
+  align-items: center;
   min-width: 0;
   padding: 0.7rem 0.92rem;
   border-radius: 16px;
@@ -1422,6 +1425,7 @@ pre,
   background: color-mix(in oklab, var(--card-muted) 88%, white 12%);
   color: var(--muted);
   box-shadow: none;
+  cursor: pointer;
 }
 
 .structured-choice:hover {
@@ -1436,6 +1440,12 @@ pre,
   border-color: color-mix(in oklab, var(--accent) 78%, black 22%);
   color: white;
   box-shadow: 0 10px 24px rgba(16, 163, 127, 0.14);
+}
+
+.structured-choice-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .structured-label {
