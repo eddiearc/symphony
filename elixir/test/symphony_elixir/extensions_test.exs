@@ -1175,6 +1175,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert opened_html =~ "Create Pipeline"
     assert opened_html =~ "先创建最小可运行配置，后续再补高级项。"
+    assert opened_html =~ "你正在处理 Linear 工单"
 
     created_html =
       view
@@ -1211,7 +1212,6 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert alpha_config["id"] == "alpha"
     assert get_in(alpha_config, ["tracker", "project_slug"]) == "alpha-project"
   end
-
   test "config panel exposes save modal affordances and keyboard shortcut hook" do
     orchestrator_name = Module.concat(__MODULE__, :WorkflowEditorHooksOrchestrator)
     snapshot = static_snapshot()
