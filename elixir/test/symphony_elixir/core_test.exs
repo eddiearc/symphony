@@ -1387,6 +1387,8 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "https://example.org/issues/MT-616/use-rich-templates-for-workflowmd"
     assert prompt =~ "这是一次无人值守的编排会话"
     assert prompt =~ "只有在出现真正阻塞时才可以提前停止"
+    assert prompt =~ "`Ask Human` -> 缺少继续实现所必需的人类澄清"
+    assert prompt =~ "只包含必要的澄清问题"
     assert prompt =~ "不要包含“给用户的下一步”"
     assert prompt =~ "这是第 #2 次重试"
     assert prompt =~ "## 前提条件：可使用 Linear MCP 或 `linear_graphql` 工具"

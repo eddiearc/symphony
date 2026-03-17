@@ -1631,6 +1631,31 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "snapshot_unavailable"
   end
 
+  test "dashboard liveview localizes the Ask Human state" do
+    orchestrator_name = Module.concat(__MODULE__, :AskHumanDashboardOrchestrator)
+
+    snapshot =
+      static_snapshot()
+      |> put_in([:running, Access.at(0), :state], "Ask Human")
+
+    {:ok, _orchestrator_pid} =
+      StaticOrchestrator.start_link(
+        name: orchestrator_name,
+        snapshot: snapshot,
+        refresh: %{
+          queued: true,
+          coalesced: true,
+          requested_at: DateTime.utc_now(),
+          operations: ["poll"]
+        }
+      )
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    {:ok, _view, html} = live(build_conn(), "/")
+    assert html =~ "待人工确认"
+  end
+
   test "logs panel renders from left nav even when the log file is empty" do
     orchestrator_name = Module.concat(__MODULE__, :LogsPanelOrchestrator)
     snapshot = static_snapshot()

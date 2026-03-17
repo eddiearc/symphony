@@ -29,6 +29,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   @state_labels %{
     "Todo" => "待开始",
     "In Progress" => "进行中",
+    "Ask Human" => "待人工确认",
     "Human Review" => "人工评审",
     "Rework" => "返工中",
     "Merging" => "合并中",

@@ -64,6 +64,7 @@ agent 必须能够与 Linear 通信，可以通过已配置的 Linear MCP server
 - `Todo` -> 已排队；开始实际工作前必须立即切到 `In Progress`。
   - 特殊情况：如果已经挂了 PR，则按反馈/返工循环处理（完整执行 PR feedback sweep，处理或明确反驳意见，重新验证，再回到 `Human Review`）。
 - `In Progress` -> 正在积极实现中。
+- `Ask Human` -> 缺少继续实现所必需的人类澄清；补充 workpad，发布一条简洁的澄清评论，然后停止，直到工单被移回活跃状态。
 - `Human Review` -> 已挂 PR 且已完成验证；等待人工审批。
 - `Merging` -> 已由人工批准；执行 `land` skill 流程（不要直接调用 `gh pr merge`）。
 - `Rework` -> reviewer 要求修改；需要重新规划并实现。
@@ -78,6 +79,7 @@ agent 必须能够与 Linear 通信，可以通过已配置的 Linear MCP server
    - `Todo` -> 立即移到 `In Progress`，然后确认 bootstrap workpad 评论存在（若不存在则创建），再开始执行流程。
      - 如果已经挂了 PR，则先审阅所有未处理的 PR 评论，并判断是需要修改还是需要明确提出异议回应。
    - `In Progress` -> 从当前 scratchpad 评论继续执行流程。
+   - `Ask Human` -> 不做实现或状态修改；停止并等待人类回复并将工单移回活跃状态。
    - `Human Review` -> 等待并轮询决定或评审更新。
    - `Merging` -> 进入该状态后，打开并遵循 `.codex/skills/land/SKILL.md`；不要直接调用 `gh pr merge`。
    - `Rework` -> 进入返工流程。
@@ -142,6 +144,7 @@ agent 必须能够与 Linear 通信，可以通过已配置的 Linear MCP server
 
 仅当任务完成被真正阻塞，且阻塞原因是缺少必要工具，或缺少无法在当前会话内解决的认证或权限时，才可使用这一机制。
 
+- 缺少产品细节、需求边界或业务决策，不属于 blocked-access escape hatch；这类情况应走 `Ask Human` 状态。
 - GitHub 默认不算合法阻塞项。必须先尝试所有 fallback 策略（替代 remote 或 auth 方式，然后继续发布或评审流程）。
 - 在所有 fallback 策略都已尝试并写入 workpad 之前，不要因为 GitHub 访问或认证问题将工单移动到 `Human Review`。
 - 如果缺少的是非 GitHub 的必要工具，或非 GitHub 的必要认证不可用，则应将工单移动到 `Human Review`，并在 workpad 中写一段简短 blocker 说明，内容包括：
@@ -163,6 +166,10 @@ agent 必须能够与 Linear 通信，可以通过已配置的 Linear MCP server
    - 每当到达一个有意义的里程碑后，立刻更新 workpad（例如：复现完成、代码改动落地、验证完成、评审反馈已处理）。
    - 计划中已完成的工作绝不能留成未勾选状态。
    - 对于启动时处于 `Todo` 且已挂 PR 的工单，kickoff 后、开始新功能工作前，必须立刻运行完整的 PR feedback sweep protocol。
+   - 如果被缺失的需求细节或业务决策阻塞，不要继续猜测实现；改为最小化问题集合，更新 workpad，并执行 `Ask Human` 分流。
+     - 在同一条 workpad 评论中记录缺失信息为何阻塞实现、当前假设为何不足，以及需要人类回答的最小问题集合。
+     - 额外发布一条简洁的顶层 Linear 评论，只包含必要的澄清问题，方便人类直接回复。
+     - 将 issue 状态移到 `Ask Human`，然后停止当前运行；不要把这种情况记为 `Human Review` 或 blocked-access。
 5. 执行当前 scope 所要求的验证或测试。
    - 强制门槛：如果 ticket 中提供了 `Validation`、`Test Plan` 或 `Testing` 要求，必须全部执行；任何未满足项都视为工作未完成。
    - 优先选择能直接证明你所修改行为的定向证据。
@@ -233,6 +240,7 @@ agent 必须能够与 Linear 通信，可以通过已配置的 Linear MCP server
 - 如果 issue 状态是 `Backlog`，不要修改它；等待人工将其移到 `Todo`。
 - 不要为了规划或进度跟踪去编辑 issue 正文或描述。
 - 每个 issue 只能使用一条持久的 workpad 评论（`## Codex Workpad`）。
+- `Ask Human` 只用于缺失的人类澄清，不用于工具/权限阻塞，也不用于已完成实现后的审批等待。
 - 如果当前会话无法编辑评论，则使用更新脚本。只有在 MCP 编辑和脚本编辑都不可用时，才报告 blocked。
 - 临时 proof edit 只允许用于本地验证，且必须在 commit 前恢复。
 - 如果发现超出范围的改进项，应单独创建一条 Backlog issue，而不是扩张当前 scope；同时必须补充清晰的标题、描述、验收标准、相同 project 归属、指向当前工单的 `related` 链接，以及在后续依赖当前工单时使用 `blockedBy`。
