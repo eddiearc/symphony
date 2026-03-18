@@ -6,6 +6,7 @@ defmodule SymphonyElixir.MixProject do
       app: :symphony_elixir,
       version: "0.1.0",
       elixir: "~> 1.19",
+      elixirc_paths: elixirc_paths(Mix.env()),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
       start_permanent: Mix.env() == :prod,
       test_coverage: [
@@ -67,6 +68,9 @@ defmodule SymphonyElixir.MixProject do
       extra_applications: [:logger]
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "skills/symphonyctl/lib", "test/support"]
+  defp elixirc_paths(_env), do: ["lib", "skills/symphonyctl/lib"]
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
