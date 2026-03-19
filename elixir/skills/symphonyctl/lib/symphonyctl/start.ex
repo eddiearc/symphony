@@ -8,7 +8,7 @@ defmodule Symphonyctl.Start do
   @type deps :: %{
           optional(:notify) => (atom(), String.t() -> :ok),
           optional(:port_open?) => (non_neg_integer() -> boolean()),
-          optional(:spawn_command) => (String.t(), keyword() -> {:ok, integer()} | {:error, term()})
+          optional(:spawn_command) => (String.t(), map(), keyword() -> {:ok, integer()} | {:error, term()})
         }
 
   @spec run(map(), deps()) :: {:ok, :already_running | :started} | {:error, term()}
@@ -24,12 +24,18 @@ defmodule Symphonyctl.Start do
   end
 
   defp launch(config, deps) do
-    command =
-      "PORT=#{config.port} " <>
-        "PIPELINE_ROOT=#{shell_value(config.pipelines_root)} " <>
-        config.start.command
+    linear_token =
+      System.get_env("LINEAR_API_KEY") ||
+        dot_env("LINEAR_API_KEY", "~/.zshrc") ||
+        dot_env("LINEAR_API_KEY", "~/.zprofile") ||
+        ""
 
-    case deps.spawn_command.(command, cd: config.project_root, log_path: config.start.log_path) do
+    env_prefix =
+      "env PORT=#{config.port} PIPELINE_ROOT=#{shell_value(config.pipelines_root)} LINEAR_API_KEY=#{shell_value(linear_token)}"
+
+    command = "#{env_prefix} #{config.start.command}"
+
+    case deps.spawn_command.(command, config, cd: config.project_root, log_path: config.start.log_path) do
       {:ok, pid} ->
         _ =
           deps.notify.(
@@ -44,13 +50,13 @@ defmodule Symphonyctl.Start do
     end
   end
 
-  defp runtime_deps do
+  def runtime_deps do
     %{
       notify: fn level, message ->
         Notifier.notify(%{}, level, message)
       end,
       port_open?: &port_open?/1,
-      spawn_command: &spawn_command/2
+      spawn_command: &spawn_command/3
     }
   end
 
@@ -65,9 +71,9 @@ defmodule Symphonyctl.Start do
     end
   end
 
-  defp spawn_command(command, opts) do
+  defp spawn_command(command, config, opts) do
     cd = Keyword.fetch!(opts, :cd)
-    log_path = Keyword.fetch!(opts, :log_path)
+    log_path = config.start.log_path
 
     File.mkdir_p!(Path.dirname(log_path))
 
@@ -79,7 +85,7 @@ defmodule Symphonyctl.Start do
 
       shell_path ->
         full_command =
-          "nohup #{command} >> #{shell_value(log_path)} 2>&1 < /dev/null & echo $!"
+          "nohup env PORT=#{config.port} PIPELINE_ROOT=#{shell_value(config.pipelines_root)} #{command} >> #{shell_value(log_path)} 2>&1 < /dev/null & echo $!"
 
         case System.cmd(shell_path, ["-lc", full_command], cd: cd, stderr_to_stdout: true) do
           {output, 0} ->
@@ -100,5 +106,21 @@ defmodule Symphonyctl.Start do
 
   defp shell_value(value) when is_binary(value) do
     "'#{String.replace(value, "'", "'\"'\"'")}'"
+  end
+
+  defp dot_env(key, path) do
+    expanded = Path.expand(path)
+    regex = ~r/#{key}="([^"]*)"/
+
+    case File.read(expanded) do
+      {:ok, content} ->
+        case Regex.run(regex, content) do
+          [_, value] -> value
+          nil -> nil
+        end
+
+      {:error, _} ->
+        nil
+    end
   end
 end

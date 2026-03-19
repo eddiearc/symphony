@@ -31,7 +31,7 @@ defmodule Symphonyctl.Pipeline do
     end
   end
 
-  defp runtime_deps do
+  def runtime_deps do
     %{
       run_command: &run_command/3
     }

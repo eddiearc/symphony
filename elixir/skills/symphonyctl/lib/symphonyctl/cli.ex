@@ -28,9 +28,7 @@ defmodule Symphonyctl.CLI do
           optional(:issue_create) => (map(), map(), map() -> {:ok, map()} | {:error, term()}),
           optional(:load_config) => (Path.t() | nil, map() -> {:ok, map()} | {:error, term()}),
           optional(:monitor_run) => (String.t(), map(), map() -> {:ok, map()} | {:error, term()}),
-          optional(:pipeline_create) => (map(), map(), map() -> {:ok, term()} | {:error, term()}),
-          optional(:puts) => (String.t() -> term()),
-          optional(:start_run) => (map(), map() -> {:ok, term()} | {:error, term()})
+          optional(:puts) => (String.t() -> term())
         }
 
   @spec main([String.t()]) :: no_return()
@@ -91,7 +89,7 @@ defmodule Symphonyctl.CLI do
 
   defp do_route(["start"], opts, deps) do
     with {:ok, config} <- load_config(opts, deps),
-         {:ok, result} <- deps.start_run.(override_start_config(config, opts), %{}) do
+         {:ok, result} <- Start.run(override_start_config(config, opts), Start.runtime_deps()) do
       {:ok, result}
     else
       {:error, reason} -> {:error, format_reason(reason)}
@@ -105,10 +103,10 @@ defmodule Symphonyctl.CLI do
          {:ok, workspace_root} <-
            fetch_required_opt(opts, :workspace_root, "--workspace-root is required"),
          {:ok, result} <-
-           deps.pipeline_create.(
+           Pipeline.create(
              %{id: id, project_slug: project_slug, repo: repo, workspace_root: workspace_root},
              override_pipeline_config(config, opts),
-             %{}
+             Pipeline.runtime_deps()
            ) do
       {:ok, result}
     else
@@ -194,9 +192,7 @@ defmodule Symphonyctl.CLI do
       issue_create: &Issue.create/3,
       load_config: &Config.load/2,
       monitor_run: &Monitor.run/3,
-      pipeline_create: &Pipeline.create/3,
-      puts: &IO.puts/1,
-      start_run: &Start.run/2
+      puts: &IO.puts/1
     }
   end
 end
