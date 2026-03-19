@@ -1,0 +1,28 @@
+project_root: /Users/arc/repo/symphony/elixir
+pipelines_root: /Users/arc/repo/symphony/elixir/pipelines
+workspace_root: /Users/arc/repo/symphony/workspaces
+port: 4000
+
+start:
+  command: make run
+  log_path: /Users/arc/repo/symphony/elixir/log/symphonyctl.log
+
+linear:
+  api_url: https://api.linear.app/graphql
+  api_token_env: LINEAR_API_KEY
+  project_slug: delivery
+
+monitor:
+  poll_interval_ms: 15000
+  terminal_states:
+    - Done
+    - Closed
+    - Cancelled
+    - Canceled
+    - Duplicate
+
+notify:
+  telegram:
+    enabled: false
+    bot_token_env: TELEGRAM_BOT_TOKEN
+    chat_id_env: TELEGRAM_CHAT_ID
